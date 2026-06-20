@@ -76,7 +76,8 @@ fi
 
 log "8/8 cron: git pull памяти каждые 10 мин (auto-sync)"
 CRON_LINE="*/10 * * * * cd $SANA_HOME && git pull --ff-only >> $SANA_HOME/.memsync.log 2>&1"
-( crontab -l 2>/dev/null | grep -v "cd $SANA_HOME && git pull" ; echo "$CRON_LINE" ) | crontab -
+# `|| true` — пустой crontab/grep без совпадений возвращает 1 и под set -e ронял скрипт
+( crontab -l 2>/dev/null | grep -v "cd $SANA_HOME && git pull" || true ; echo "$CRON_LINE" ) | crontab - || true
 
 # рендер systemd-юнита с реальными путями
 sed -e "s#__USER__#$(whoami)#g" -e "s#__BOT_DIR__#$BOT_DIR#g" -e "s#__VENV__#$VENV#g" \
