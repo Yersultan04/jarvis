@@ -63,6 +63,10 @@ GROQ_API_KEYS = [
 ]
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# G7: на лёгком хосте (GCP e2-micro, 1GB) rag-cms не поднимаем — быстрый путь
+# (search+Groq) отключаем, всё уходит в claude -p (он читает память из файлов).
+# Groq при этом остаётся для голоса (Whisper). 0 = выключить быстрый путь.
+RAG_ENABLED = os.environ.get("JARVIS_RAG_ENABLED", "1") not in ("0", "false", "")
 # Claude Code CLI (подписка): fallback при исчерпании Groq + режим качества /claude.
 # Пусто = авто-детект через PATH.
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "")
@@ -580,7 +584,7 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
         return
 
     # G2 гибрид: вопрос-факт → Groq (быстро ~7с), действие/живые инструменты → Claude.
-    use_claude = needs_claude(text) or not GROQ_API_KEYS
+    use_claude = needs_claude(text) or not GROQ_API_KEYS or not RAG_ENABLED
     send_typing(chat_id)
     placeholder = send_message(
         chat_id, "⚙️ Думаю и делаю…" if use_claude else "🔍 Смотрю в памяти…"

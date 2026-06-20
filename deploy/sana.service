@@ -1,0 +1,20 @@
+[Unit]
+Description=Sana — личный AI-оператор (Telegram-бот 24/7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__BOT_DIR__
+EnvironmentFile=__BOT_DIR__/.env
+ExecStart=__VENV__/bin/python jarvis_bot.py
+Restart=always
+RestartSec=5
+# 1GB RAM — ограничиваем процесс, чтобы claude -p не утянул всю систему в OOM
+MemoryMax=900M
+StandardOutput=append:__BOT_DIR__/bot.log
+StandardError=append:__BOT_DIR__/bot.err.log
+
+[Install]
+WantedBy=multi-user.target

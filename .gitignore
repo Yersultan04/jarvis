@@ -6,10 +6,9 @@
 # === Секреты ===
 .env
 .env.*
-!.env.example
 **/.env
 **/.env.*
-!**/.env.example
+!**/*.example
 *token*.json
 google_token*.json
 gcp_oauth.json

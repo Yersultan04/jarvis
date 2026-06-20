@@ -172,7 +172,17 @@ class JarvisAPI:
                 lines.append(f"Ерсултан: {q}")
                 lines.append(f"Sana: {a}")
             ctx = "\n".join(lines) + "\n\n"
-        prompt = f"{self._TELEGRAM_BRIEF}\n\n{ctx}--- СООБЩЕНИЕ ОТ ЕРСУЛТАНА ---\n{message}"
+        mem = self._memory_index()  # G7: индекс памяти для хостов без авто-памяти Claude
+        mem_block = ""
+        if mem:
+            mem_block = (
+                "--- ДОЛГОВРЕМЕННАЯ ПАМЯТЬ (индекс; детали по проекту — Read memory/<файл>.md) ---\n"
+                f"{mem}\n\n"
+            )
+        prompt = (
+            f"{self._TELEGRAM_BRIEF}\n\n{mem_block}{ctx}"
+            f"--- СООБЩЕНИЕ ОТ ЕРСУЛТАНА ---\n{message}"
+        )
         answer = self._run_claude(
             [
                 self._claude_bin, "-p", "--output-format", "text",
@@ -185,6 +195,20 @@ class JarvisAPI:
             label="Chelsea",
         )
         return AgentAnswer(status="succeeded", answer=answer, citations=[])
+
+    def _memory_index(self, max_chars: int = 6000) -> str:
+        """G7: индекс долговременной памяти (workspace/MEMORY.md) — для хостов без
+        авто-памяти Claude (GCP VM). На ноуте файла в корне нет (память живёт в
+        ~/.claude) → возвращает пусто, инъекция сама отключается."""
+        if not self._workspace:
+            return ""
+        import os
+        p = os.path.join(self._workspace, "MEMORY.md")
+        try:
+            with open(p, encoding="utf-8") as f:
+                return f.read()[:max_chars]
+        except OSError:
+            return ""
 
     _BUILDER_BRIEF = (
         "Ты — Sana в режиме исполнителя задач по коду (автопилот). Работаешь "
