@@ -1,0 +1,10 @@
+requests>=2.31.0
+edge-tts>=6.1.0
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.2.0
+flask>=3.0.0
+# ВАЖНО: НЕ ставить aiodns — на этой машине его c-ares резолвер не читает DNS,
+# из-за чего edge-tts падает. Без aiodns aiohttp использует системный резолвер (работает).
+
+# Системные зависимости (не pip): ffmpeg (для mp3→ogg/opus), Claude Code CLI (claude.cmd).

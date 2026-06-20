@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ragcms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Default: 127.0.0.1:5432 (только для отладки с самого сервера).
+      # Bank deploy переопределяет: POSTGRES_BIND=0.0.0.0 POSTGRES_PORT=14005
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  qdrant:
+    # 1.13+ for native sparse vector support, 1.17+ for weighted RRF (rrf weights).
+    # We still do weighted score blending client-side (Qdrant fusion is rank-based),
+    # but the version bump gives us native sparse storage + prefetch API.
+    image: qdrant/qdrant:v1.17.0
+    container_name: ragcms-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    ports:
+      # HTTP REST (Qdrant dashboard / API).
+      - "${QDRANT_BIND:-127.0.0.1}:${QDRANT_HTTP_PORT:-6333}:6333"
+      # gRPC.
+      - "${QDRANT_BIND:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  backend:
+    build:
+      context: ./backend
+    container_name: ragcms-backend
+    restart: unless-stopped
+    ports:
+      # Default: 127.0.0.1:8000 — нужен только для прямого debug-доступа к /docs.
+      # В нормальной работе backend дёргается через frontend nginx → /api.
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      QDRANT_URL: http://qdrant:6333
+      DATA_DIR: /data
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://rag-cms.eskender.tech}
+      MAX_UPLOAD_MB: "200"
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+      VOYAGE_EMBED_MODEL: ${VOYAGE_EMBED_MODEL:-voyage-3}
+      VOYAGE_EMBED_DIM: ${VOYAGE_EMBED_DIM:-1024}
+      # --- embedding provider dispatch (Jarvis: keep voyage) ---
+      EMBED_PROVIDER: ${EMBED_PROVIDER:-voyage}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-dummy}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-4o-mini}
+      LLM_RERANK_MODEL: ${LLM_RERANK_MODEL:-openai/gpt-4o-mini}
+      LLM_VISION_MODEL: ${LLM_VISION_MODEL:-openai/gpt-4o-mini}
+      # --- per-role endpoint overrides (Jarvis: chat+rerank → Groq) ---
+      LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      RERANK_API_BASE_URL: ${RERANK_API_BASE_URL:-}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
+      VISION_API_BASE_URL: ${VISION_API_BASE_URL:-}
+      VISION_API_KEY: ${VISION_API_KEY:-}
+      CONTEXTUAL_ENRICHMENT: ${CONTEXTUAL_ENRICHMENT:-false}
+      INGEST_OCR_FALLBACK: ${INGEST_OCR_FALLBACK:-true}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-24}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      DEFAULT_FTS_LANGUAGE: ${DEFAULT_FTS_LANGUAGE:-simple}
+    volumes:
+      - rag_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ragcms-frontend
+    restart: unless-stopped
+    ports:
+      # Default: 127.0.0.1:8081 — host nginx terminates TLS and proxies here (eskender.tech prod).
+      # For direct exposure (e.g. bank server) override in .env:
+      #   FRONTEND_BIND=0.0.0.0
+      #   FRONTEND_PORT=14001
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8081}:80"
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  rag_data:

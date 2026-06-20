@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python projects/jarvis/bot/gcal.py:*)",
+      "Bash(python projects/jarvis/bot/gmail_tool.py:*)",
+      "mcp__trello"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "Bash(sudo:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(git rebase:*)",
+      "Bash(docker:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(ssh:*)",
+      "Bash(kubectl:*)",
+      "Bash(npm publish:*)",
+      "Bash(vercel:*)",
+      "Bash(del:*)",
+      "Bash(rmdir:*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Edit(**/.env)",
+      "Write(**/.env)",
+      "Read(**/*secret*)",
+      "Edit(**/*secret*)",
+      "Write(**/*secret*)"
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+# ============================================================
+# Jarvis (Sana) — приватный репозиторий
+# Секреты и личные данные НИКОГДА не коммитим.
+# ============================================================
+
+# === Секреты ===
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*token*.json
+google_token*.json
+gcp_oauth.json
+*credentials*.json
+*secret*
+
+# === Runtime / личные данные (генерируются на лету) ===
+audit/
+inbox/
+memory_inbox/
+*.log
+*.mp3
+*.ogg
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# === Node (rag-cms frontend) ===
+node_modules/
+dist/
+.vite/
+.next/
+
+# === Данные / артефакты ===
+data/
+*.sqlite
+*.db
+*.pkl
+*.faiss
+
+# === IDE / OS ===
+.idea/
+.vscode/
+.DS_Store
+*.swp

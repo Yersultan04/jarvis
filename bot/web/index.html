@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sana</title>
+<style>
+  :root { --cyan:#22d3ee; --blue:#38bdf8; --violet:#818cf8; --bg:#05080f; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 800px at 50% 18%, #0b1830 0%, var(--bg) 60%),
+      var(--bg);
+    color:#cfe8f5; font-family:'Segoe UI',system-ui,sans-serif;
+    display:flex; flex-direction:column; align-items:center; min-height:100%;
+    overflow:hidden;
+  }
+  .topbar { width:100%; padding:18px 26px; display:flex; justify-content:space-between;
+    align-items:center; font-size:13px; letter-spacing:2px; color:#5b7a93; }
+  .topbar .name { color:var(--cyan); font-weight:600; letter-spacing:4px; }
+  .stage { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; }
+  canvas { display:block; filter:drop-shadow(0 0 40px rgba(34,211,238,.25)); }
+  .status { font-size:15px; letter-spacing:3px; text-transform:uppercase; color:#7fb3cc; min-height:20px; }
+  .reply {
+    max-width:680px; margin:6px 20px 0; padding:0 8px; text-align:center;
+    font-size:16px; line-height:1.55; color:#dbeefb; max-height:34vh; overflow-y:auto;
+    white-space:pre-wrap; opacity:.96;
+  }
+  .reply::-webkit-scrollbar{width:6px} .reply::-webkit-scrollbar-thumb{background:#1b3a52;border-radius:3px}
+  .dock { width:100%; max-width:760px; padding:16px 20px 30px; display:flex; gap:12px; align-items:center; }
+  .dock input {
+    flex:1; background:rgba(13,28,46,.7); border:1px solid #1e3c57; border-radius:30px;
+    padding:14px 20px; color:#dbeefb; font-size:15px; outline:none;
+  }
+  .dock input:focus { border-color:var(--cyan); box-shadow:0 0 0 2px rgba(34,211,238,.15); }
+  .btn {
+    width:54px; height:54px; border-radius:50%; border:1px solid #244863;
+    background:rgba(13,28,46,.7); color:var(--cyan); cursor:pointer; font-size:22px;
+    display:flex; align-items:center; justify-content:center; transition:.2s;
+  }
+  .btn:hover { border-color:var(--cyan); box-shadow:0 0 16px rgba(34,211,238,.3); }
+  .btn.rec { background:#7f1d2d; color:#fff; border-color:#b91c3c; box-shadow:0 0 20px rgba(185,28,60,.5); }
+  .hint { font-size:12px; color:#456; letter-spacing:1px; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="name">S A N A</span>
+    <span id="clock"></span>
+  </div>
+
+  <div class="stage">
+    <canvas id="orb" width="420" height="420"></canvas>
+    <div class="status" id="status">готова</div>
+    <div class="reply" id="reply"></div>
+  </div>
+
+  <div class="dock">
+    <input id="text" placeholder="Спроси или скажи Sana…" autocomplete="off" />
+    <button class="btn" id="send" title="Отправить">➤</button>
+    <button class="btn" id="mic" title="Говорить">🎙</button>
+  </div>
+
+<script>
+const C = document.getElementById('orb'), X = C.getContext('2d');
+const W = C.width, H = C.height, CX = W/2, CY = H/2;
+let state = 'idle';           // idle | listening | thinking | speaking
+let level = 0, levelTarget = 0;  // 0..1 амплитуда/энергия
+let t = 0;
+
+const THEME = {
+  idle:      {c:'#22d3ee', c2:'#0e7490', speed:0.18},
+  listening: {c:'#38bdf8', c2:'#0369a1', speed:0.5},
+  thinking:  {c:'#818cf8', c2:'#4338ca', speed:1.2},
+  speaking:  {c:'#22d3ee', c2:'#0891b2', speed:0.7},
+};
+
+function draw(){
+  t += 0.016;
+  level += (levelTarget - level) * 0.12;
+  const th = THEME[state];
+  X.clearRect(0,0,W,H);
+
+  // дыхание + амплитуда
+  const breathe = 0.5 + 0.5*Math.sin(t*1.4);
+  const energy = state==='idle' ? breathe*0.25 : (0.3 + level*0.7);
+  const coreR = 46 + energy*26;
+
+  // внешние вращающиеся дуги (3 кольца)
+  for(let r=0;r<3;r++){
+    const rad = 92 + r*36;
+    const arcs = 3 + r;
+    const dir = r%2===0 ? 1 : -1;
+    const rot = t*th.speed*dir + r;
+    X.lineWidth = 3 - r*0.4;
+    for(let a=0;a<arcs;a++){
+      const start = rot + a*(Math.PI*2/arcs);
+      const len = (Math.PI*2/arcs)*0.55;
+      X.beginPath();
+      X.arc(CX,CY,rad, start, start+len);
+      X.strokeStyle = th.c; X.globalAlpha = 0.5 - r*0.1 + energy*0.3;
+      X.shadowColor = th.c; X.shadowBlur = 14;
+      X.stroke();
+    }
+  }
+  X.globalAlpha = 1; X.shadowBlur = 0;
+
+  // тонкое кольцо-граница ядра
+  X.beginPath(); X.arc(CX,CY, coreR+14, 0, Math.PI*2);
+  X.strokeStyle = th.c; X.globalAlpha = 0.35 + energy*0.3; X.lineWidth = 2;
+  X.shadowColor = th.c; X.shadowBlur = 18; X.stroke();
+  X.globalAlpha = 1; X.shadowBlur = 0;
+
+  // ядро — радиальный градиент
+  const g = X.createRadialGradient(CX,CY,2, CX,CY,coreR);
+  g.addColorStop(0,'#ffffff');
+  g.addColorStop(0.25, th.c);
+  g.addColorStop(1, th.c2);
+  X.beginPath(); X.arc(CX,CY,coreR,0,Math.PI*2);
+  X.fillStyle = g; X.shadowColor = th.c; X.shadowBlur = 40+energy*40; X.fill();
+  X.shadowBlur = 0;
+
+  requestAnimationFrame(draw);
+}
+draw();
+
+function setState(s){ state = s;
+  document.getElementById('status').textContent =
+    {idle:'готова', listening:'слушаю', thinking:'думаю…', speaking:'говорю'}[s];
+}
+
+// часы
+setInterval(()=>{ const d=new Date();
+  document.getElementById('clock').textContent =
+    d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}); },1000);
+
+// ---- общение ----
+const replyEl = document.getElementById('reply');
+function showReply(txt){ replyEl.textContent = txt; }
+
+async function ask(text){
+  if(!text.trim()) return;
+  setState('thinking'); showReply('');
+  try{
+    const r = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text, voice:true})});
+    const d = await r.json();
+    if(d.error){ showReply('⚠️ '+d.error); setState('idle'); return; }
+    showReply(d.reply||'');
+    if(d.audio) playAudio(d.audio); else setState('idle');
+  }catch(e){ showReply('⚠️ '+e); setState('idle'); }
+}
+
+document.getElementById('send').onclick = ()=>{ const i=document.getElementById('text'); ask(i.value); i.value=''; };
+document.getElementById('text').addEventListener('keydown', e=>{ if(e.key==='Enter'){ const i=e.target; ask(i.value); i.value=''; }});
+
+// ---- голос-ответ с реакцией сферы на амплитуду ----
+let actx;
+function playAudio(b64){
+  setState('speaking');
+  const audio = new Audio('data:audio/ogg;base64,'+b64);
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    const src = actx.createMediaElementSource(audio);
+    const an = actx.createAnalyser(); an.fftSize = 256;
+    src.connect(an); an.connect(actx.destination);
+    const buf = new Uint8Array(an.frequencyBinCount);
+    (function tick(){
+      if(audio.paused||audio.ended) return;
+      an.getByteFrequencyData(buf);
+      let s=0; for(const v of buf) s+=v; levelTarget = Math.min(1, (s/buf.length)/90);
+      requestAnimationFrame(tick);
+    })();
+  }catch(e){}
+  audio.onended = ()=>{ levelTarget=0; setState('idle'); };
+  audio.play().catch(()=>{ setState('idle'); });
+}
+
+// ---- запись голоса ----
+let rec, chunks=[], recording=false;
+const micBtn = document.getElementById('mic');
+micBtn.onclick = async ()=>{
+  if(recording){ rec.stop(); return; }
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    rec = new MediaRecorder(stream);
+    chunks=[];
+    rec.ondataavailable = e=> chunks.push(e.data);
+    rec.onstart = ()=>{ recording=true; micBtn.classList.add('rec'); setState('listening'); levelTarget=0.6; };
+    rec.onstop = async ()=>{
+      recording=false; micBtn.classList.remove('rec'); setState('thinking');
+      stream.getTracks().forEach(t=>t.stop());
+      const blob = new Blob(chunks, {type: rec.mimeType||'audio/webm'});
+      const ext = (rec.mimeType||'').includes('ogg') ? 'ogg' : 'webm';
+      const fd = new FormData(); fd.append('audio', blob, 'rec.'+ext);
+      try{
+        const r = await fetch('/api/voice',{method:'POST',body:fd});
+        const d = await r.json();
+        if(d.error){ showReply('⚠️ '+d.error); setState('idle'); return; }
+        showReply((d.transcript?('🎤 '+d.transcript+'\n\n'):'')+(d.reply||''));
+        if(d.audio) playAudio(d.audio); else setState('idle');
+      }catch(e){ showReply('⚠️ '+e); setState('idle'); }
+    };
+    rec.start();
+  }catch(e){ showReply('⚠️ Нет доступа к микрофону: '+e); }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# Секреты — никогда в репозиторий
+.env
+gcp_oauth.json
+*credentials*.json
+*token*.json
+.google_token*
+inbox/
+audit/
+bot.log
+bot.err.log
+__pycache__/
+*.pyc

@@ -1,0 +1,80 @@
+# Compose overlay for the on-prem / OSS deployment.
+# Usage:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.onprem.yml up -d
+#
+# The default .env.onprem.example expects everything to be managed (Voyage +
+# OpenRouter), so this file is mostly empty — backend/postgres/qdrant/frontend
+# come from docker-compose.prod.yml. The overlay only kicks in when you want
+# extra self-hosted services and wire them in below.
+#
+# OPTIONAL SERVICES (uncomment as needed):
+#
+#   tei-bge-m3     — Hugging Face Text Embeddings Inference serving BAAI/bge-m3
+#                    on an OpenAI-compatible /v1/embeddings endpoint. Switch the
+#                    env block in .env.onprem.example to EMBED_PROVIDER=openai
+#                    and point EMBED_API_BASE_URL at http://tei-bge-m3:80/v1.
+#
+#   vllm-qwen3vl   — self-hosted Qwen3-VL-30B-A3B-Instruct for OCR. Needs an
+#                    NVIDIA GPU (≥24 GB VRAM). Set VISION_API_BASE_URL at
+#                    http://vllm-qwen3vl:8000/v1 in env.
+
+services:
+  # ----- Self-hosted embedding server (uncomment to enable) -----
+  # tei-bge-m3:
+  #   image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+  #   container_name: ragcms-tei-bge-m3
+  #   restart: unless-stopped
+  #   command:
+  #     - --model-id=BAAI/bge-m3
+  #     - --port=80
+  #     - --max-batch-tokens=16384
+  #     - --max-concurrent-requests=64
+  #   environment:
+  #     HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+  #   volumes:
+  #     - hf_cache:/data
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 4G
+  #
+  # backend:
+  #   depends_on:
+  #     tei-bge-m3:
+  #       condition: service_started
+
+  # ----- Self-hosted Qwen3-VL for OCR (uncomment to enable) -----
+  # vllm-qwen3vl:
+  #   image: vllm/vllm-openai:latest
+  #   container_name: ragcms-vllm-qwen3vl
+  #   restart: unless-stopped
+  #   command:
+  #     - --model=Qwen/Qwen3-VL-30B-A3B-Instruct
+  #     - --served-model-name=Qwen/Qwen3-VL-30B-A3B-Instruct
+  #     - --port=8000
+  #     - --max-model-len=32768
+  #     - --gpu-memory-utilization=0.90
+  #     - --trust-remote-code
+  #   environment:
+  #     HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+  #   volumes:
+  #     - hf_cache:/root/.cache/huggingface
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+  # ----- A no-op placeholder so the file parses with everything commented. -----
+  # Compose requires at least one service; if you uncomment any of the above,
+  # delete this stub.
+  noop:
+    image: busybox:1.36
+    command: ["sh", "-c", "echo 'onprem overlay loaded — uncomment services to enable'; sleep infinity"]
+    restart: "no"
+    profiles: ["__noop"]   # never starts by default
+
+volumes:
+  hf_cache:
