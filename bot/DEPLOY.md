@@ -55,12 +55,21 @@ Google Cloud Always Free: 1 инстанс e2-micro (us-west1/central1/east1), 3
   вести память в репозитории и `git pull` на VM по cron.
 - **Trello/Groq/Gemini** — API, работают с VM из коробки.
 
-### Готовность
-setup.sh + sana.service подготовлю по команде «делаем GCP». Тебе останется только
-создать VM и сделать `claude setup-token`.
+### Готовность — ✅ КИТ ГОТОВ (G7, 2026-06-20)
+Полный деплой-кит лежит в **`deploy/`**, пошаговый рунбук — **`deploy/README-GCP.md`**:
+- `deploy/setup.sh` — провижининг Ubuntu (swap/node/claude/venv/clone/cron).
+- `deploy/sana.service` — systemd-юнит (Restart=always, MemoryMax=900M).
+- `deploy/sync-memory.sh` — ноут→`sana-memory` git auto-sync памяти (VM тянет по cron).
+- `deploy/.env.vm.example` — конфиг VM (RAG выключен, claude -p timeout поднят).
+
+Архитектура на VM: `~/sana` (репо `sana-memory`, = WORKSPACE, авто-pull) +
+`~/jarvis` (код) симлинком. rag-cms НЕ поднимаем (1GB мало) → `JARVIS_RAG_ENABLED=0`,
+всё через `claude -p`, который читает память из синканых файлов + инъекция индекса
+`MEMORY.md` в промпт. Тебе остаётся: создать VM в GCP Console + `claude setup-token` +
+перенести Google-токены. Подробно — `deploy/README-GCP.md`.
 
 ---
 
 ## Рекомендация
-Сейчас включить Слой 1 (одна команда выше) — бот переживёт ребуты сегодня же.
-Слой 2 — когда решишь, что нужен always-on без ноута.
+Слой 1 (автостарт на ноуте) — для «здесь и сейчас». Слой 2 (GCP) — по рунбуку
+`deploy/README-GCP.md`, когда нужен always-on без ноута.
