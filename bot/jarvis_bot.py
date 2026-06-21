@@ -22,6 +22,7 @@ from pathlib import Path
 import requests
 
 from jarvis_api import AgentAnswer, JarvisAPI
+from trello_api import TrelloClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +89,12 @@ BUILDER_TIMEOUT = float(os.environ.get("JARVIS_BUILDER_TIMEOUT", "900"))
 # git-операции вне рабочего корня. Запускаем билдер прямо в репо. Пусто = workspace
 # (на ноуте projects/* — реальные подпапки, git работает из коробки).
 BUILDER_CWD = os.environ.get("JARVIS_BUILDER_CWD", "")
+# Sana Corp Ф1 — Trello-движок (Python ходит в Trello напрямую, claude делает работу).
+TRELLO_API_KEY = os.environ.get("TRELLO_API_KEY", "")
+TRELLO_TOKEN = os.environ.get("TRELLO_TOKEN", "")
+TRELLO_UPNEXT = os.environ.get("TRELLO_UPNEXT_LIST", "6a34f4e6fd7c6752c1624be4")
+TRELLO_INREVIEW = os.environ.get("TRELLO_INREVIEW_LIST", "6a34f4e678f35e14f560a3d3")
+TRELLO_AUTO_LABEL = os.environ.get("TRELLO_AUTO_LABEL", "6a37887b7d7ce696155f0acb")
 # Голос (Фаза B): edge-tts → mp3 → ffmpeg → ogg/opus → Telegram voice.
 TTS_VOICE = os.environ.get("JARVIS_TTS_VOICE", "ru-RU-SvetlanaNeural")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
@@ -764,22 +771,57 @@ def run_undo(api: JarvisAPI, chat_id: int) -> None:
     send_message(chat_id, "↩️ <b>Отмена</b>\n\n" + body, html_mode=True)
 
 
+_AUTO_TASK_TMPL = (
+    "Ты — Sana, исполнитель автономной компании. Выполни ОДНУ низкорисковую задачу. "
+    "ТОЛЬКО: документация, тесты, аудит кода, рефактор, ресёрч-отчёт. НЕ трогай прод, "
+    "НЕ push, НЕ merge, НЕ deploy, без внешних действий (письма/деньги). Если задача "
+    "требует рискового/внешнего — НЕ делай, ответь «нужно решение директора» и опиши "
+    "что именно.\n"
+    "Если задача по коду — ветка git checkout -b sana/<имя>, минимальные правки, прогони "
+    "тесты если есть, git commit (без push).\n"
+    "В конце дай краткий отчёт: что сделано, ветка/изменённые файлы.\n\n"
+    "--- ЗАДАЧА (из Trello) ---\n{task}"
+)
+
+
 def run_auto(api: JarvisAPI, chat_id: int) -> None:
-    """Sana Corp Ф1: один автономный цикл COO (auto-ok карта → низкориск → In Review)."""
+    """Sana Corp Ф1: один автономный цикл. Python берёт верхнюю auto-ok карту из
+    Up Next → claude (builder) делает низкориск → Python двигает карту в In Review."""
     t0 = time.time()
+    if not (TRELLO_API_KEY and TRELLO_TOKEN):
+        send_message(chat_id, "⚠️ Trello-ключи не заданы (TRELLO_API_KEY/TRELLO_TOKEN в .env).")
+        return
     try:
-        ans = api.ask_auto(cwd=BUILDER_CWD or None)
-        body = format_answer(ans)
-        head = "🏢 <b>Цикл завершён.</b>\n\n"
-        status = "ok"
+        tc = TrelloClient(TRELLO_API_KEY, TRELLO_TOKEN)
+        cards = tc.cards_with_label(TRELLO_UPNEXT, TRELLO_AUTO_LABEL)
+        if not cards:
+            audit_log(chat_id, "auto", "нет auto-ok задач", route="builder",
+                      status="ok", dur_s=time.time() - t0)
+            send_message(chat_id, "🏢 Нет auto-ok задач в Up Next. Компания свободна.")
+            return
+        card = cards[0]
+        task = _AUTO_TASK_TMPL.format(task=f"{card.name}\n{card.desc}")
+        ans = api.ask_builder(task, cwd=BUILDER_CWD or None)
+        report = format_answer(ans)
+        try:
+            tc.add_comment(card.id, "🏢 Sana (auto):\n" + _strip_tags(report)[:1500])
+            tc.move_card(card.id, TRELLO_INREVIEW)
+            moved = "→ In Review ✓"
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("trello move/comment failed")
+            moved = f"(карту подвинуть не смог: {html.escape(str(exc))})"
+        audit_log(chat_id, "auto", card.name, route="builder",
+                  status="ok", dur_s=time.time() - t0)
+        send_message(
+            chat_id,
+            f"🏢 <b>Цикл завершён.</b> Взяла: <i>{html.escape(card.name)}</i> {moved}\n\n{report}",
+            html_mode=True,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("run_auto failed")
-        body = friendly_error(exc)
-        head = "⚠️ <b>Цикл не завершён:</b>\n\n"
-        status = "error"
-    audit_log(chat_id, "auto", "автономный цикл COO", route="builder",
-              status=status, dur_s=time.time() - t0)
-    send_message(chat_id, head + body, html_mode=True)
+        audit_log(chat_id, "auto", "цикл", route="builder",
+                  status="error", dur_s=time.time() - t0, error=str(exc))
+        send_message(chat_id, friendly_error(exc), html_mode=True)
 
 
 def _gh_ci_red(repo: str = "Yersultan04/incident-compass") -> str | None:
