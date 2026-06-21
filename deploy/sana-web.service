@@ -1,0 +1,23 @@
+[Unit]
+Description=Sana Web — командный центр (HUD) за Cloudflare Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__BOT_DIR__
+EnvironmentFile=__BOT_DIR__/.env
+# gunicorn: 1 воркер + потоки (claude -p и так спавнит node-подпроцесс на запрос —
+# несколько воркеров = несколько node = OOM на 1GB). Длинный таймаут под claude -p.
+ExecStart=__VENV__/bin/gunicorn --workers 1 --threads 4 --timeout 300 \
+          --bind 127.0.0.1:8765 sana_web:app
+Restart=always
+RestartSec=5
+# 1GB RAM — держим веб скромнее бота: бот (900M) приоритетнее как основной канал.
+MemoryMax=600M
+StandardOutput=append:__BOT_DIR__/web.log
+StandardError=append:__BOT_DIR__/web.err.log
+
+[Install]
+WantedBy=multi-user.target

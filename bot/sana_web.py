@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -34,6 +35,41 @@ if GROQ_API_KEYS:
     api.configure_groq(GROQ_API_KEYS, GROQ_BASE_URL, GROQ_MODEL)
 
 app = Flask(__name__, static_folder="web", static_url_path="/static")
+
+# --- Авторизация -----------------------------------------------------------
+# HUD выставляется наружу через Cloudflare Tunnel + Cloudflare Access.
+# Access сам гейтит вход по Google-почте и проставляет заголовок
+# Cf-Access-Authenticated-Email. Здесь — defense-in-depth: пускаем только если
+#   (1) запрос локальный (127.0.0.1 — локальная разработка), ИЛИ
+#   (2) Cf-Access-Authenticated-Email совпадает с владельцем, ИЛИ
+#   (3) предъявлен Bearer-токен SANA_WEB_TOKEN (запасной прямой доступ).
+# Иначе 403 — даже если кто-то узнал URL туннеля.
+OWNER_EMAIL = os.environ.get("SANA_WEB_EMAIL", "slvaita3@gmail.com").strip().lower()
+WEB_TOKEN = os.environ.get("SANA_WEB_TOKEN", "").strip()
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+@app.before_request
+def _require_auth():
+    if request.method == "OPTIONS":
+        return None
+    # cloudflared проксирует на 127.0.0.1, поэтому remote_addr НЕ годится для
+    # «это локально». Признак прихода через Cloudflare — заголовки Cf-Ray /
+    # Cf-Connecting-Ip (их ставит сам Cloudflare; снаружи на локальный порт,
+    # слушающий только 127.0.0.1, их не подделать — туда достаёт лишь туннель).
+    via_cf = bool(request.headers.get("Cf-Ray") or request.headers.get("Cf-Connecting-Ip"))
+    if not via_cf and (request.remote_addr or "") in _LOCAL_HOSTS:
+        return None  # настоящая локальная разработка
+    cf_email = (request.headers.get("Cf-Access-Authenticated-Email") or "").strip().lower()
+    if via_cf and cf_email and cf_email == OWNER_EMAIL:
+        return None  # Cloudflare Access подтвердил владельца
+    if WEB_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth[7:].strip() == WEB_TOKEN:
+            return None  # запасной прямой доступ по токену
+    logger.warning("auth denied: ip=%s via_cf=%s cf_email=%r path=%s",
+                   request.remote_addr, via_cf, cf_email, request.path)
+    return jsonify(error="forbidden"), 403
 
 
 def _audio_b64(text: str) -> str | None:

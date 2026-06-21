@@ -4,6 +4,10 @@ google-api-python-client>=2.0.0
 google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.2.0
 flask>=3.0.0
+# gunicorn — продакшн-сервер для sana_web на VM (dev-Flask наружу не гоняем).
+# На Windows ставится, но не запускается — там HUD поднимается dev-сервером
+# через `python sana_web.py`. На Linux/VM работает.
+gunicorn>=21.0.0
 # ВАЖНО: НЕ ставить aiodns — на этой машине его c-ares резолвер не читает DNS,
 # из-за чего edge-tts падает. Без aiodns aiohttp использует системный резолвер (работает).
 

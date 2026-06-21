@@ -1,0 +1,20 @@
+[Unit]
+Description=Cloudflare Tunnel — sana.askrizz.com → localhost:8765
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+# Токен туннеля (из Cloudflare Zero Trust dashboard) лежит в gitignored-файле:
+#   echo 'CLOUDFLARED_TOKEN=eyJ...' | sudo tee /etc/cloudflared.env
+EnvironmentFile=/etc/cloudflared.env
+# Remotely-managed tunnel: публичный хост и Access-политика настроены в дашборде,
+# на VM достаточно запустить с токеном. Никакого config.yml/credentials на диске.
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+Restart=always
+RestartSec=5
+MemoryMax=150M
+
+[Install]
+WantedBy=multi-user.target
