@@ -12,9 +12,38 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger("jarvis.dashboard")
+
+# Авторизация (G6) — дашборд = пульт автономии, выставляется наружу через
+# Cloudflare Tunnel + Access. Та же логика, что в sana_web.py: cloudflared
+# проксирует на 127.0.0.1, поэтому «локально» определяем по ОТСУТСТВИЮ
+# cloudflare-заголовков, а не по IP (иначе весь интернет = localhost).
+_DEFAULT_OWNER = "slvaita3@gmail.com"
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_authorized(request) -> bool:
+    """True → запрос разрешён. Локальный (без CF) / CF Access владельца / Bearer.
+
+    Env читаем в момент запроса, а не на импорте: dashboard импортится в
+    jarvis_bot ДО загрузки .env, иначе значения из .env были бы потеряны.
+    """
+    owner = os.environ.get("SANA_WEB_EMAIL", _DEFAULT_OWNER).strip().lower()
+    token = os.environ.get("SANA_WEB_TOKEN", "").strip()
+    via_cf = bool(request.headers.get("Cf-Ray") or request.headers.get("Cf-Connecting-Ip"))
+    if not via_cf and (request.remote_addr or "") in _LOCAL_HOSTS:
+        return True
+    cf_email = (request.headers.get("Cf-Access-Authenticated-Email") or "").strip().lower()
+    if via_cf and cf_email and cf_email == owner:
+        return True
+    if token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth[7:].strip() == token:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------- ЖИВОЙ ОФИС (Ф4)
@@ -259,6 +288,15 @@ def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: in
         return
 
     app = Flask(__name__)
+
+    @app.before_request
+    def _guard():
+        if request.method == "OPTIONS":
+            return None
+        if _is_authorized(request):
+            return None
+        logger.warning("dashboard auth denied: ip=%s path=%s", request.remote_addr, request.path)
+        return jsonify({"error": "forbidden"}), 403
 
     @app.post("/api/control")
     def control():
