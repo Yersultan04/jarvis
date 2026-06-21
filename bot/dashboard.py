@@ -46,6 +46,34 @@ def _is_authorized(request) -> bool:
     return False
 
 
+def read_activity(audit_file, n: int = 8) -> list[dict]:
+    """Последние n действий Sana из аудит-лога (G5, JSONL) — для ленты на дашборде.
+
+    Чистая функция (легко тестируется): отдаёт компактные записи в хронологическом
+    порядке. Сбой/отсутствие файла → пустой список (лента просто не показывается).
+    """
+    p = Path(audit_file)
+    if not p.exists():
+        return []
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in lines[-n:]:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        out.append({
+            "ts": (rec.get("ts", "") or "")[5:16].replace("T", " "),  # MM-DD ЧЧ:ММ
+            "kind": rec.get("kind", ""),
+            "request": (rec.get("request") or "")[:80],
+            "status": rec.get("status", ""),
+        })
+    return out
+
+
 # ---------------------------------------------------------------- ЖИВОЙ ОФИС (Ф4)
 _OFFICE = r"""<!doctype html><html lang=ru><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
@@ -262,25 +290,42 @@ h1{font-size:20px}.sub{color:#8b98a9;font-size:13px;margin:4px 0 18px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
 .card{background:#11161f;border:1px solid #1f2733;border-radius:12px;padding:14px}.card.busy{border-color:#2ea043}.card.couch{opacity:.5}
 .nm{font-weight:700}.role{color:#8b98a9;font-size:11px;text-transform:uppercase}.st{margin-top:10px;font-size:13px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.detail{color:#8b98a9;font-size:12px;margin-top:4px}</style></head>
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.detail{color:#8b98a9;font-size:12px;margin-top:4px}
+h2{font-size:15px;margin:24px 0 10px;color:#c9d4e0}
+.feed{display:flex;flex-direction:column;gap:6px;max-width:760px}
+.act{display:flex;gap:8px;align-items:baseline;background:#11161f;border:1px solid #1f2733;border-radius:8px;padding:8px 12px;font-size:13px}
+.act .ts{color:#6b7888;font-variant-numeric:tabular-nums;white-space:nowrap}
+.act .rq{color:#c9d4e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act .ok{margin-left:auto}</style></head>
 <body><h1>🏢 Sana Corp — сетка</h1><div class=sub id=auto></div><div class=grid id=g></div>
+<h2>🧾 Последняя активность</h2><div class=feed id=act></div>
 <script>const I={idle:"🛋",working:"🟢",coordinating:"🧭",reviewing:"👁",testing:"🧪",meeting:"💬",done:"✅",error:"⚠️"};
 const C={idle:"#5b6675",working:"#2ea043",coordinating:"#58a6ff",reviewing:"#d29922",testing:"#a371f7",meeting:"#58a6ff",done:"#2ea043",error:"#f85149"};
+const AI={text:"💬",voice:"🎤",image:"🖼",task:"🛠",brief:"☀️",sync:"🔄",undo:"↩️",auto:"🏢",digest:"🌙"};
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
 async function t(){try{const d=await(await fetch('/api/state')).json();const a=d.autonomy||{};
 document.getElementById('auto').textContent=(a.enabled?'автономия ВКЛ · '+(a.done_today||0)+'/'+(a.max||10):'автономия ВЫКЛ');
 const g=document.getElementById('g');g.innerHTML='';for(const x of d.agents){const b=x.state!=='idle'&&x.state!=='done';
 const e=document.createElement('div');e.className='card '+(b?'busy':'couch');
-e.innerHTML=`<div class=nm>${I[x.state]||'•'} ${x.name}</div><div class=role>${x.role||''}</div>
-<div class=st><span class=dot style="background:${C[x.state]||'#5b6675'}"></span>${b?x.state:'на диване'}</div>${x.detail?`<div class=detail>${x.detail}</div>`:''}`;
-g.appendChild(e);}}catch(e){}}t();setInterval(t,3000);</script></body></html>"""
+e.innerHTML=`<div class=nm>${I[x.state]||'•'} ${esc(x.name)}</div><div class=role>${esc(x.role||'')}</div>
+<div class=st><span class=dot style="background:${C[x.state]||'#5b6675'}"></span>${b?esc(x.state):'на диване'}</div>${x.detail?`<div class=detail>${esc(x.detail)}</div>`:''}`;
+g.appendChild(e);}}catch(e){}}
+async function act(){try{const d=await(await fetch('/api/activity')).json();const f=document.getElementById('act');f.innerHTML='';
+for(const x of (d.activity||[]).slice().reverse()){const e=document.createElement('div');e.className='act';
+e.innerHTML=`<span class=ts>${esc(x.ts)}</span><span>${AI[x.kind]||'•'}</span><span class=rq>${esc(x.request)}</span><span class=ok>${x.status==='ok'?'✅':'⚠️'}</span>`;
+f.appendChild(e);}}catch(e){}}
+t();act();setInterval(t,3000);setInterval(act,5000);</script></body></html>"""
 
 
 def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: int,
-                  control_cb=None) -> None:
+                  control_cb=None, audit_file=None) -> None:
     """Запустить Flask живой офис + сетку (блокирующе — вызывать в потоке-демоне).
 
     control_cb(action) — колбэк для кнопок сайта: "go" / "stop" / "run".
+    audit_file — путь к аудит-логу для ленты активности (по умолчанию bot/audit/actions.jsonl).
     """
+    if audit_file is None:
+        audit_file = Path(__file__).with_name("audit") / "actions.jsonl"
     try:
         from flask import Flask, Response, jsonify, request
     except ImportError:
@@ -316,6 +361,10 @@ def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: in
     @app.get("/grid")
     def grid() -> "Response":
         return Response(_GRID, mimetype="text/html")
+
+    @app.get("/api/activity")
+    def activity():
+        return jsonify({"activity": read_activity(audit_file, 8)})
 
     @app.get("/api/state")
     def state():
