@@ -12,9 +12,66 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger("jarvis.dashboard")
+
+# Авторизация (G6) — дашборд = пульт автономии, выставляется наружу через
+# Cloudflare Tunnel + Access. Та же логика, что в sana_web.py: cloudflared
+# проксирует на 127.0.0.1, поэтому «локально» определяем по ОТСУТСТВИЮ
+# cloudflare-заголовков, а не по IP (иначе весь интернет = localhost).
+_DEFAULT_OWNER = "slvaita3@gmail.com"
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_authorized(request) -> bool:
+    """True → запрос разрешён. Локальный (без CF) / CF Access владельца / Bearer.
+
+    Env читаем в момент запроса, а не на импорте: dashboard импортится в
+    jarvis_bot ДО загрузки .env, иначе значения из .env были бы потеряны.
+    """
+    owner = os.environ.get("SANA_WEB_EMAIL", _DEFAULT_OWNER).strip().lower()
+    token = os.environ.get("SANA_WEB_TOKEN", "").strip()
+    via_cf = bool(request.headers.get("Cf-Ray") or request.headers.get("Cf-Connecting-Ip"))
+    if not via_cf and (request.remote_addr or "") in _LOCAL_HOSTS:
+        return True
+    cf_email = (request.headers.get("Cf-Access-Authenticated-Email") or "").strip().lower()
+    if via_cf and cf_email and cf_email == owner:
+        return True
+    if token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth[7:].strip() == token:
+            return True
+    return False
+
+
+def read_activity(audit_file, n: int = 8) -> list[dict]:
+    """Последние n действий Sana из аудит-лога (G5, JSONL) — для ленты на дашборде.
+
+    Чистая функция (легко тестируется): отдаёт компактные записи в хронологическом
+    порядке. Сбой/отсутствие файла → пустой список (лента просто не показывается).
+    """
+    p = Path(audit_file)
+    if not p.exists():
+        return []
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in lines[-n:]:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        out.append({
+            "ts": (rec.get("ts", "") or "")[5:16].replace("T", " "),  # MM-DD ЧЧ:ММ
+            "kind": rec.get("kind", ""),
+            "request": (rec.get("request") or "")[:80],
+            "status": rec.get("status", ""),
+        })
+    return out
 
 
 # ---------------------------------------------------------------- ЖИВОЙ ОФИС (Ф4)
@@ -233,25 +290,42 @@ h1{font-size:20px}.sub{color:#8b98a9;font-size:13px;margin:4px 0 18px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
 .card{background:#11161f;border:1px solid #1f2733;border-radius:12px;padding:14px}.card.busy{border-color:#2ea043}.card.couch{opacity:.5}
 .nm{font-weight:700}.role{color:#8b98a9;font-size:11px;text-transform:uppercase}.st{margin-top:10px;font-size:13px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.detail{color:#8b98a9;font-size:12px;margin-top:4px}</style></head>
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.detail{color:#8b98a9;font-size:12px;margin-top:4px}
+h2{font-size:15px;margin:24px 0 10px;color:#c9d4e0}
+.feed{display:flex;flex-direction:column;gap:6px;max-width:760px}
+.act{display:flex;gap:8px;align-items:baseline;background:#11161f;border:1px solid #1f2733;border-radius:8px;padding:8px 12px;font-size:13px}
+.act .ts{color:#6b7888;font-variant-numeric:tabular-nums;white-space:nowrap}
+.act .rq{color:#c9d4e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act .ok{margin-left:auto}</style></head>
 <body><h1>🏢 Sana Corp — сетка</h1><div class=sub id=auto></div><div class=grid id=g></div>
+<h2>🧾 Последняя активность</h2><div class=feed id=act></div>
 <script>const I={idle:"🛋",working:"🟢",coordinating:"🧭",reviewing:"👁",testing:"🧪",meeting:"💬",done:"✅",error:"⚠️"};
 const C={idle:"#5b6675",working:"#2ea043",coordinating:"#58a6ff",reviewing:"#d29922",testing:"#a371f7",meeting:"#58a6ff",done:"#2ea043",error:"#f85149"};
+const AI={text:"💬",voice:"🎤",image:"🖼",task:"🛠",brief:"☀️",sync:"🔄",undo:"↩️",auto:"🏢",digest:"🌙"};
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
 async function t(){try{const d=await(await fetch('/api/state')).json();const a=d.autonomy||{};
 document.getElementById('auto').textContent=(a.enabled?'автономия ВКЛ · '+(a.done_today||0)+'/'+(a.max||10):'автономия ВЫКЛ');
 const g=document.getElementById('g');g.innerHTML='';for(const x of d.agents){const b=x.state!=='idle'&&x.state!=='done';
 const e=document.createElement('div');e.className='card '+(b?'busy':'couch');
-e.innerHTML=`<div class=nm>${I[x.state]||'•'} ${x.name}</div><div class=role>${x.role||''}</div>
-<div class=st><span class=dot style="background:${C[x.state]||'#5b6675'}"></span>${b?x.state:'на диване'}</div>${x.detail?`<div class=detail>${x.detail}</div>`:''}`;
-g.appendChild(e);}}catch(e){}}t();setInterval(t,3000);</script></body></html>"""
+e.innerHTML=`<div class=nm>${I[x.state]||'•'} ${esc(x.name)}</div><div class=role>${esc(x.role||'')}</div>
+<div class=st><span class=dot style="background:${C[x.state]||'#5b6675'}"></span>${b?esc(x.state):'на диване'}</div>${x.detail?`<div class=detail>${esc(x.detail)}</div>`:''}`;
+g.appendChild(e);}}catch(e){}}
+async function act(){try{const d=await(await fetch('/api/activity')).json();const f=document.getElementById('act');f.innerHTML='';
+for(const x of (d.activity||[]).slice().reverse()){const e=document.createElement('div');e.className='act';
+e.innerHTML=`<span class=ts>${esc(x.ts)}</span><span>${AI[x.kind]||'•'}</span><span class=rq>${esc(x.request)}</span><span class=ok>${x.status==='ok'?'✅':'⚠️'}</span>`;
+f.appendChild(e);}}catch(e){}}
+t();act();setInterval(t,3000);setInterval(act,5000);</script></body></html>"""
 
 
 def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: int,
-                  control_cb=None) -> None:
+                  control_cb=None, audit_file=None) -> None:
     """Запустить Flask живой офис + сетку (блокирующе — вызывать в потоке-демоне).
 
     control_cb(action) — колбэк для кнопок сайта: "go" / "stop" / "run".
+    audit_file — путь к аудит-логу для ленты активности (по умолчанию bot/audit/actions.jsonl).
     """
+    if audit_file is None:
+        audit_file = Path(__file__).with_name("audit") / "actions.jsonl"
     try:
         from flask import Flask, Response, jsonify, request
     except ImportError:
@@ -259,6 +333,15 @@ def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: in
         return
 
     app = Flask(__name__)
+
+    @app.before_request
+    def _guard():
+        if request.method == "OPTIONS":
+            return None
+        if _is_authorized(request):
+            return None
+        logger.warning("dashboard auth denied: ip=%s path=%s", request.remote_addr, request.path)
+        return jsonify({"error": "forbidden"}), 403
 
     @app.post("/api/control")
     def control():
@@ -278,6 +361,10 @@ def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: in
     @app.get("/grid")
     def grid() -> "Response":
         return Response(_GRID, mimetype="text/html")
+
+    @app.get("/api/activity")
+    def activity():
+        return jsonify({"activity": read_activity(audit_file, 8)})
 
     @app.get("/api/state")
     def state():

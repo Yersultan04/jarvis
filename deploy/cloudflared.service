@@ -1,5 +1,5 @@
 [Unit]
-Description=Cloudflare Tunnel — sana.askrizz.com → localhost:8765
+Description=Cloudflare Tunnel — sana.askrizz.com → localhost:8770 (дашборд-пульт в боте)
 After=network-online.target
 Wants=network-online.target
 

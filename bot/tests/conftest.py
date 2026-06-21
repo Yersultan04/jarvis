@@ -1,0 +1,7 @@
+"""Общая настройка тестов: bot/ на sys.path, чтобы импортить модули бота."""
+import sys
+from pathlib import Path
+
+BOT_DIR = Path(__file__).resolve().parent.parent
+if str(BOT_DIR) not in sys.path:
+    sys.path.insert(0, str(BOT_DIR))

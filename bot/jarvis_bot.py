@@ -1056,7 +1056,7 @@ def _cal_soon(api: JarvisAPI) -> str | None:
     try:
         from datetime import datetime
         out = subprocess.run(
-            [api._claude_bin and "python" or "python", "projects/jarvis/bot/gcal.py", "list", "1"],
+            ["python", "projects/jarvis/bot/gcal.py", "list", "1"],
             capture_output=True, timeout=40, cwd=WORKSPACE_DIR,
         ).stdout.decode("utf-8", "replace")
         # gcal печатает "- <ISO> | <title>"; ищем событие в ближайший час
