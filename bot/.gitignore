@@ -6,6 +6,7 @@ gcp_oauth.json
 .google_token*
 inbox/
 audit/
+autonomy_state.json
 bot.log
 bot.err.log
 __pycache__/

@@ -95,6 +95,12 @@ TRELLO_TOKEN = os.environ.get("TRELLO_TOKEN", "")
 TRELLO_UPNEXT = os.environ.get("TRELLO_UPNEXT_LIST", "6a34f4e6fd7c6752c1624be4")
 TRELLO_INREVIEW = os.environ.get("TRELLO_INREVIEW_LIST", "6a34f4e678f35e14f560a3d3")
 TRELLO_AUTO_LABEL = os.environ.get("TRELLO_AUTO_LABEL", "6a37887b7d7ce696155f0acb")
+# Непрерывная автономия (Ф1). По умолчанию ВЫКЛ — включается /go, глушится /stop.
+AUTONOMY_DEFAULT = os.environ.get("JARVIS_AUTONOMY", "0") not in ("0", "false", "")
+AUTONOMY_MAX_PER_DAY = int(os.environ.get("JARVIS_AUTONOMY_MAX", "10"))   # лимит карт/день
+AUTONOMY_EVERY_MIN = int(os.environ.get("JARVIS_AUTONOMY_EVERY_MIN", "15"))  # как часто тик
+AUTONOMY_STATE_FILE = Path(__file__).with_name("autonomy_state.json")
+_auto_lock = threading.Lock()  # один builder за раз (1GB VM — не запускать 2 параллельно)
 # Голос (Фаза B): edge-tts → mp3 → ffmpeg → ogg/opus → Telegram voice.
 TTS_VOICE = os.environ.get("JARVIS_TTS_VOICE", "ru-RU-SvetlanaNeural")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
@@ -541,7 +547,8 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
             "🎤 <b>голосом</b> — надиктуй войс, я расшифрую и сделаю\n"
             "🛠 <b>/task …</b> — сделаю задачу по коду: ветка + правки + тесты + отчёт\n"
             "📊 разберу статус проектов и риски\n\n"
-            "🏢 <b>/auto</b> — автономный цикл: беру auto-ok задачу и делаю\n"
+            "🏢 <b>/auto</b> — один автономный цикл (взять auto-ok задачу)\n"
+            "🟢 <b>/go</b> · 🔴 <b>/stop</b> — вкл/выкл непрерывную автономию\n"
             "🧾 <b>/audit</b> — что я делала (лог действий)\n"
             "↩️ <b>/undo</b> — отменить последнее обратимое действие\n"
             "🔄 <b>/sync</b> — сверить память с реальностью · 🧹 <b>/reset</b> — забыть диалог\n\n"
@@ -588,6 +595,25 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
             html_mode=True,
         )
         threading.Thread(target=run_auto, args=(api, chat_id), daemon=True).start()
+        return
+
+    if text in ("/go", "/гоу", "/запусти", "/работай"):
+        set_autonomy(True)
+        st = _autonomy_state()
+        send_message(
+            chat_id,
+            f"🟢 <b>Автономия ВКЛ.</b> Беру auto-ok задачи сама каждые "
+            f"{AUTONOMY_EVERY_MIN} мин (лимит {AUTONOMY_MAX_PER_DAY}/день, "
+            f"сегодня {st['done_today']}). Тихие часы {WATCH_QUIET_FROM}:00–"
+            f"{WATCH_QUIET_TO}:00. <b>/stop</b> — заглушить.",
+            html_mode=True,
+        )
+        return
+
+    if text in ("/stop", "/стоп", "/стой"):
+        set_autonomy(False)
+        send_message(chat_id, "🔴 <b>Автономия ВЫКЛ.</b> Новые циклы не запускаю "
+                     "(текущий, если идёт, доделаю). /go — включить снова.", html_mode=True)
         return
 
     low = text.lower()
@@ -784,44 +810,125 @@ _AUTO_TASK_TMPL = (
 )
 
 
+# ---------- автономия: состояние (kill-switch + дневной лимит, переживает рестарт) ----------
+
+
+def _autonomy_state() -> dict:
+    """Состояние автономии из файла, с авто-сбросом счётчика на новый день."""
+    import json
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        st = json.loads(AUTONOMY_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    if st.get("date") != today:  # новый день → обнуляем счётчик, флаг enabled держим
+        st = {"date": today, "done_today": 0, "enabled": st.get("enabled", AUTONOMY_DEFAULT)}
+        _save_autonomy_state(st)
+    st.setdefault("enabled", AUTONOMY_DEFAULT)
+    st.setdefault("done_today", 0)
+    return st
+
+
+def _save_autonomy_state(st: dict) -> None:
+    import json
+    try:
+        AUTONOMY_STATE_FILE.write_text(json.dumps(st), encoding="utf-8")
+    except OSError:
+        logger.exception("save autonomy state failed")
+
+
+def set_autonomy(enabled: bool) -> None:
+    st = _autonomy_state()
+    st["enabled"] = enabled
+    _save_autonomy_state(st)
+
+
+def _bump_done() -> int:
+    st = _autonomy_state()
+    st["done_today"] = st.get("done_today", 0) + 1
+    _save_autonomy_state(st)
+    return st["done_today"]
+
+
+def _auto_cycle_core(api: JarvisAPI) -> tuple[str | None, str | None]:
+    """Один цикл: берёт верхнюю auto-ok карту → builder делает → двигает в In Review.
+    Возвращает (имя_карты, html-тело отчёта) или (None, None), если auto-ok карт нет."""
+    tc = TrelloClient(TRELLO_API_KEY, TRELLO_TOKEN)
+    cards = tc.cards_with_label(TRELLO_UPNEXT, TRELLO_AUTO_LABEL)
+    if not cards:
+        return None, None
+    card = cards[0]
+    task = _AUTO_TASK_TMPL.format(task=f"{card.name}\n{card.desc}")
+    ans = api.ask_builder(task, cwd=BUILDER_CWD or None)
+    report = format_answer(ans)
+    try:
+        tc.add_comment(card.id, "🏢 Sana (auto):\n" + _strip_tags(report)[:1500])
+        tc.move_card(card.id, TRELLO_INREVIEW)
+        moved = "→ In Review ✓"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("trello move/comment failed")
+        moved = f"(карту подвинуть не смог: {html.escape(str(exc))})"
+    return card.name, f"Взяла: <i>{html.escape(card.name)}</i> {moved}\n\n{report}"
+
+
 def run_auto(api: JarvisAPI, chat_id: int) -> None:
-    """Sana Corp Ф1: один автономный цикл. Python берёт верхнюю auto-ok карту из
-    Up Next → claude (builder) делает низкориск → Python двигает карту в In Review."""
-    t0 = time.time()
+    """Ручной /auto: один цикл с отчётом (в т.ч. «нет задач»)."""
     if not (TRELLO_API_KEY and TRELLO_TOKEN):
         send_message(chat_id, "⚠️ Trello-ключи не заданы (TRELLO_API_KEY/TRELLO_TOKEN в .env).")
         return
+    if not _auto_lock.acquire(blocking=False):
+        send_message(chat_id, "⏳ Цикл уже идёт — подожди, пока закончу текущую задачу.")
+        return
+    t0 = time.time()
     try:
-        tc = TrelloClient(TRELLO_API_KEY, TRELLO_TOKEN)
-        cards = tc.cards_with_label(TRELLO_UPNEXT, TRELLO_AUTO_LABEL)
-        if not cards:
+        name, body = _auto_cycle_core(api)
+        if name is None:
             audit_log(chat_id, "auto", "нет auto-ok задач", route="builder",
                       status="ok", dur_s=time.time() - t0)
             send_message(chat_id, "🏢 Нет auto-ok задач в Up Next. Компания свободна.")
             return
-        card = cards[0]
-        task = _AUTO_TASK_TMPL.format(task=f"{card.name}\n{card.desc}")
-        ans = api.ask_builder(task, cwd=BUILDER_CWD or None)
-        report = format_answer(ans)
-        try:
-            tc.add_comment(card.id, "🏢 Sana (auto):\n" + _strip_tags(report)[:1500])
-            tc.move_card(card.id, TRELLO_INREVIEW)
-            moved = "→ In Review ✓"
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("trello move/comment failed")
-            moved = f"(карту подвинуть не смог: {html.escape(str(exc))})"
-        audit_log(chat_id, "auto", card.name, route="builder",
-                  status="ok", dur_s=time.time() - t0)
-        send_message(
-            chat_id,
-            f"🏢 <b>Цикл завершён.</b> Взяла: <i>{html.escape(card.name)}</i> {moved}\n\n{report}",
-            html_mode=True,
-        )
+        done = _bump_done()
+        audit_log(chat_id, "auto", name, route="builder", status="ok", dur_s=time.time() - t0)
+        send_message(chat_id, f"🏢 <b>Цикл завершён</b> ({done}/{AUTONOMY_MAX_PER_DAY} сегодня).\n"
+                     + body, html_mode=True)
     except Exception as exc:  # noqa: BLE001
         logger.exception("run_auto failed")
         audit_log(chat_id, "auto", "цикл", route="builder",
                   status="error", dur_s=time.time() - t0, error=str(exc))
         send_message(chat_id, friendly_error(exc), html_mode=True)
+    finally:
+        _auto_lock.release()
+
+
+def autonomy_tick(api: JarvisAPI) -> None:
+    """Непрерывная автономия: если ВКЛ, лимит не достигнут и не занято — один цикл.
+    Молчит, когда auto-ok карт нет (idle). Отчитывается владельцу по обработанной карте."""
+    if not OWNER_CHAT_ID or not (TRELLO_API_KEY and TRELLO_TOKEN):
+        return
+    st = _autonomy_state()
+    if not st.get("enabled"):
+        return
+    if st["done_today"] >= AUTONOMY_MAX_PER_DAY:
+        return
+    if not _auto_lock.acquire(blocking=False):
+        return  # занят ручным /auto или предыдущим тиком — пропускаем
+    chat_id = int(OWNER_CHAT_ID)
+    try:
+        name, body = _auto_cycle_core(api)
+        if name is None:
+            return  # нет задач — тихо
+        done = _bump_done()
+        audit_log(chat_id, "auto", name, route="builder", status="ok")
+        send_message(chat_id, f"🏢 <b>Авто</b> ({done}/{AUTONOMY_MAX_PER_DAY}). " + body,
+                     html_mode=True)
+        if done >= AUTONOMY_MAX_PER_DAY:
+            send_message(chat_id, f"🏁 Дневной лимит автономии ({AUTONOMY_MAX_PER_DAY}) достигнут — "
+                         "пауза до завтра. /auto для ручного прогона.")
+    except Exception:  # noqa: BLE001
+        logger.exception("autonomy_tick failed")
+    finally:
+        _auto_lock.release()
 
 
 def _gh_ci_red(repo: str = "Yersultan04/incident-compass") -> str | None:
@@ -902,6 +1009,7 @@ def scheduler_loop(api: JarvisAPI) -> None:
     from datetime import datetime
     last_fired_date = ""
     last_watch = 0.0
+    last_auto = 0.0
     while True:
         try:
             now = datetime.now()
@@ -911,11 +1019,15 @@ def scheduler_loop(api: JarvisAPI) -> None:
                 last_fired_date = today
                 logger.info("планировщик: шлю утренний бриф")
                 send_brief(api)
-            # G4 watcher — вне тихих часов, не чаще WATCH_EVERY_MIN
             quiet = (WATCH_QUIET_FROM <= now.hour or now.hour < WATCH_QUIET_TO)
+            # G4 watcher — вне тихих часов, не чаще WATCH_EVERY_MIN
             if not quiet and time.time() - last_watch >= WATCH_EVERY_MIN * 60:
                 last_watch = time.time()
                 watcher_tick(api)
+            # Sana Corp Ф1 — автономный цикл (если ВКЛ), вне тихих часов
+            if not quiet and time.time() - last_auto >= AUTONOMY_EVERY_MIN * 60:
+                last_auto = time.time()
+                autonomy_tick(api)
         except Exception:  # noqa: BLE001
             logger.exception("scheduler tick failed")
         time.sleep(60)
