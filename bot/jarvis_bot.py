@@ -191,7 +191,7 @@ def format_audit(entries: list[dict]) -> str:
     """HTML-сводка последних действий для команды /audit."""
     icons = {
         "text": "💬", "voice": "🎤", "image": "🖼", "task": "🛠",
-        "brief": "☀️", "sync": "🔄", "undo": "↩️",
+        "brief": "☀️", "sync": "🔄", "undo": "↩️", "auto": "🏢",
     }
     lines = ["🧾 <b>Последние действия Sana</b>\n"]
     for e in entries:
@@ -534,6 +534,7 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
             "🎤 <b>голосом</b> — надиктуй войс, я расшифрую и сделаю\n"
             "🛠 <b>/task …</b> — сделаю задачу по коду: ветка + правки + тесты + отчёт\n"
             "📊 разберу статус проектов и риски\n\n"
+            "🏢 <b>/auto</b> — автономный цикл: беру auto-ok задачу и делаю\n"
             "🧾 <b>/audit</b> — что я делала (лог действий)\n"
             "↩️ <b>/undo</b> — отменить последнее обратимое действие\n"
             "🔄 <b>/sync</b> — сверить память с реальностью · 🧹 <b>/reset</b> — забыть диалог\n\n"
@@ -570,6 +571,16 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
     if text in ("/undo", "/отмена", "/отмени"):
         send_message(chat_id, "↩️ Смотрю последнее действие…")
         threading.Thread(target=run_undo, args=(api, chat_id), daemon=True).start()
+        return
+
+    if text in ("/auto", "/авто", "/цикл"):
+        send_message(
+            chat_id,
+            "🏢 <b>Автономный цикл.</b>\n<i>Беру верхнюю auto-ok задачу, делаю "
+            "(низкориск), двигаю в In Review, отчитаюсь. Минуту…</i>",
+            html_mode=True,
+        )
+        threading.Thread(target=run_auto, args=(api, chat_id), daemon=True).start()
         return
 
     low = text.lower()
@@ -751,6 +762,24 @@ def run_undo(api: JarvisAPI, chat_id: int) -> None:
     audit_log(chat_id, "undo", "отмена последнего действия", route="claude",
               status=status, dur_s=time.time() - t0)
     send_message(chat_id, "↩️ <b>Отмена</b>\n\n" + body, html_mode=True)
+
+
+def run_auto(api: JarvisAPI, chat_id: int) -> None:
+    """Sana Corp Ф1: один автономный цикл COO (auto-ok карта → низкориск → In Review)."""
+    t0 = time.time()
+    try:
+        ans = api.ask_auto(cwd=BUILDER_CWD or None)
+        body = format_answer(ans)
+        head = "🏢 <b>Цикл завершён.</b>\n\n"
+        status = "ok"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("run_auto failed")
+        body = friendly_error(exc)
+        head = "⚠️ <b>Цикл не завершён:</b>\n\n"
+        status = "error"
+    audit_log(chat_id, "auto", "автономный цикл COO", route="builder",
+              status=status, dur_s=time.time() - t0)
+    send_message(chat_id, head + body, html_mode=True)
 
 
 def _gh_ci_red(repo: str = "Yersultan04/incident-compass") -> str | None:

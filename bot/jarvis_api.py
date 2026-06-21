@@ -246,6 +246,45 @@ class JarvisAPI:
         )
         return AgentAnswer(status="succeeded", answer=answer, citations=[])
 
+    # ---------------- Sana Corp: автономный цикл COO (Ф1) ----------------
+
+    _AUTO_BRIEF = (
+        "Ты — Sana, COO автономной ИИ-компании. Выполни ОДИН автономный цикл "
+        "работы. БЕЗОПАСНО, низкорисковые задачи. Шаги:\n"
+        "1. Открой Trello-доску «Projects — Kanban 2026», список «Up Next». Возьми "
+        "ВЕРХНЮЮ карту с меткой `auto-ok`. Если таких карт нет — кратко сообщи "
+        "«нет auto-ok задач» и остановись (ничего не делай).\n"
+        "2. Выполни задачу карты. ТОЛЬКО низкориск: документация, тесты, аудит кода, "
+        "рефактор, ресёрч-отчёт. НЕ трогай прод, НЕ push, НЕ merge, НЕ deploy, "
+        "никаких внешних действий (письма/деньги). Если карта требует рискового/"
+        "внешнего — НЕ делай, добавь коммент «нужно решение директора» и остановись.\n"
+        "3. Если задача по коду — работай в ветке git checkout -b sana/<имя>, "
+        "минимальные правки, прогони тесты если есть, git commit (без push).\n"
+        "4. Подвинь карту в список «In Review». Добавь в карту коммент с кратким "
+        "отчётом (что сделано, ветка/файлы).\n"
+        "5. Отчитайся для Telegram (кратко): какую карту взяла, что сделала, ветка, "
+        "что отправила в In Review. Если auto-ok карт не было — так и скажи."
+    )
+
+    def ask_auto(self, *, cwd: str | None = None) -> AgentAnswer:
+        """Sana Corp Ф1: один автономный цикл COO (взять auto-ok карту → выполнить
+        низкориск → In Review → отчёт). Права «строителя», без push/merge/external."""
+        if not (self._claude_bin and self._builder_settings):
+            raise RuntimeError("Builder-режим не сконфигурирован (configure_builder)")
+        answer = self._run_claude(
+            [
+                self._claude_bin, "-p", "--output-format", "text",
+                "--permission-mode", "default",
+                "--settings", self._builder_settings,
+            ],
+            self._AUTO_BRIEF,
+            timeout=self._builder_timeout,
+            cwd=cwd or self._workspace,
+            label="auto",
+            retries=0,
+        )
+        return AgentAnswer(status="succeeded", answer=answer, citations=[])
+
     # ---------------- voice: Groq Whisper STT ----------------
 
     def transcribe(
