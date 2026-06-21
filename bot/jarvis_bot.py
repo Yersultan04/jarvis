@@ -596,7 +596,7 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
         threading.Thread(target=run_undo, args=(api, chat_id), daemon=True).start()
         return
 
-    if text in ("/auto", "/авто", "/цикл"):
+    if text.split()[0] in ("/auto", "/авто", "/цикл"):
         send_message(
             chat_id,
             "🏢 <b>Автономный цикл.</b>\n<i>Беру верхнюю auto-ok задачу, делаю "
@@ -606,7 +606,7 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
         threading.Thread(target=run_auto, args=(api, chat_id), daemon=True).start()
         return
 
-    if text in ("/go", "/гоу", "/запусти", "/работай"):
+    if text.split()[0] in ("/go", "/гоу", "/запусти", "/работай"):
         set_autonomy(True)
         st = _autonomy_state()
         send_message(
@@ -619,7 +619,7 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
         )
         return
 
-    if text in ("/stop", "/стоп", "/стой"):
+    if text.split()[0] in ("/stop", "/стоп", "/стой"):
         set_autonomy(False)
         send_message(chat_id, "🔴 <b>Автономия ВЫКЛ.</b> Новые циклы не запускаю "
                      "(текущий, если идёт, доделаю). /go — включить снова.", html_mode=True)
