@@ -108,6 +108,14 @@ class JarvisAPI:
         на таймаут НЕ ретраим (он и так уже долгий, повтор удвоит ожидание).
         Возвращает stdout. Бросает RuntimeError с понятным префиксом при провале.
         """
+        # venv-bin в PATH → у claude-сессии доступны pytest и venv-python
+        # (иначе автономный ревью-гейт не может реально прогнать тесты).
+        import os
+        import sys
+        env = os.environ.copy()
+        bindir = os.path.dirname(sys.executable)
+        if bindir:
+            env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
         last_err = ""
         for attempt in range(retries + 1):
             try:
@@ -117,6 +125,7 @@ class JarvisAPI:
                     capture_output=True,
                     timeout=timeout,
                     cwd=cwd,
+                    env=env,
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(f"{label}: таймаут {int(timeout)}с") from exc
