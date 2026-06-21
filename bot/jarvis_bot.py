@@ -84,6 +84,10 @@ BUILDER_SETTINGS = os.environ.get(
     str(Path(__file__).with_name("bot-settings-dev.json")),
 )
 BUILDER_TIMEOUT = float(os.environ.get("JARVIS_BUILDER_TIMEOUT", "900"))
+# G7: на VM код-репо живёт отдельно (симлинк за пределами WORKSPACE) → claude гейтит
+# git-операции вне рабочего корня. Запускаем билдер прямо в репо. Пусто = workspace
+# (на ноуте projects/* — реальные подпапки, git работает из коробки).
+BUILDER_CWD = os.environ.get("JARVIS_BUILDER_CWD", "")
 # Голос (Фаза B): edge-tts → mp3 → ffmpeg → ogg/opus → Telegram voice.
 TTS_VOICE = os.environ.get("JARVIS_TTS_VOICE", "ru-RU-SvetlanaNeural")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
@@ -699,7 +703,7 @@ def run_task(api: JarvisAPI, chat_id: int, task: str) -> None:
     """Фоновый исполнитель задачи по коду (Фаза D): правит в ветке + коммитит, отчёт."""
     t0 = time.time()
     try:
-        ans = api.ask_builder(task)
+        ans = api.ask_builder(task, cwd=BUILDER_CWD or None)
         report = format_answer(ans)
         head = "✅ <b>Готово.</b>\n\n"
         audit_log(chat_id, "task", task, route="builder",

@@ -70,7 +70,7 @@ cp "$SANA_HOME/.claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md" 2>/dev/null || true
 cp -r "$SANA_HOME/.claude/rules/." "$HOME/.claude/rules/" 2>/dev/null || true
 if [ ! -f "$BOT_DIR/.env" ]; then
   cp "$CODE_DIR/deploy/.env.vm.example" "$BOT_DIR/.env"
-  sed -i "s#__SANA_HOME__#$SANA_HOME#g" "$BOT_DIR/.env"
+  sed -i -e "s#__SANA_HOME__#$SANA_HOME#g" -e "s#__CODE_DIR__#$CODE_DIR#g" "$BOT_DIR/.env"
   echo "!! создан $BOT_DIR/.env — ЗАПОЛНИ секреты (nano $BOT_DIR/.env)"
 fi
 
