@@ -1185,11 +1185,23 @@ def main() -> None:
         threading.Thread(target=scheduler_loop, args=(api,), daemon=True).start()
         logger.info("проактивность: утренний бриф в %s (chat %s)", BRIEF_TIME, OWNER_CHAT_ID)
 
-    # Ф3 — веб-дашборд команды (поток, localhost; смотреть через SSH-туннель).
+    # Ф3/Ф4 — веб-дашборд/офис (поток, localhost; смотреть через SSH-туннель).
     if DASH_ENABLED:
+        owner = int(OWNER_CHAT_ID) if OWNER_CHAT_ID else 0
+
+        def _dash_control(action: str) -> None:
+            """Кнопки сайта: go/stop — тумблер автономии; run — один цикл в фоне."""
+            if action == "go":
+                set_autonomy(True)
+            elif action == "stop":
+                set_autonomy(False)
+            elif action == "run" and owner:
+                threading.Thread(target=run_auto, args=(api, owner), daemon=True).start()
+
         threading.Thread(
             target=run_dashboard,
             args=(STORE, AUTONOMY_STATE_FILE, ROLES, ROSTER, DASH_HOST, DASH_PORT),
+            kwargs={"control_cb": _dash_control},
             daemon=True,
         ).start()
         logger.info("дашборд Sana Corp на %s:%d", DASH_HOST, DASH_PORT)

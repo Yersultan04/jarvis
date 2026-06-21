@@ -47,7 +47,13 @@ body{
 .pill b{color:var(--ink)}
 .pill.on{color:#062;background:#34d39922;border-color:#34d39955;color:#7ff0c2}
 .pill.off{background:#f8514922;border-color:#f8514955;color:#ffb4ad}
-.clock{font-variant-numeric:tabular-nums;color:var(--mut);font-size:13px;font-weight:600}
+.clock{font-variant-numeric:tabular-nums;color:var(--mut);font-size:13px;font-weight:600;margin-left:8px}
+.btn{font-family:Manrope,sans-serif;font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;
+  padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--panel);transition:.2s}
+.btn:hover{border-color:var(--accent);color:var(--accent);box-shadow:0 0 14px #34d39933}
+.btn.stop:hover{border-color:#f85149;color:#ff9d96;box-shadow:0 0 14px #f8514933}
+.btn:active{transform:scale(.96)}
+.btn.busy{opacity:.5;pointer-events:none}
 
 .stage-wrap{position:relative;width:100%;height:calc(100vh - 74px);display:flex;align-items:center;justify-content:center}
 .stage{position:relative;width:1180px;height:660px;max-width:97vw;
@@ -117,6 +123,9 @@ body{
   <span class=pill id=auto>—</span>
   <span class=pill id=counts>—</span>
   <div class=spacer></div>
+  <button class=btn id=btnGo>▶ Включить авто</button>
+  <button class="btn stop" id=btnStop>■ Стоп</button>
+  <button class=btn id=btnRun>⚡ Цикл сейчас</button>
   <span class=clock id=clock></span>
 </div>
 <div class=stage-wrap><div class=stage id=stage>
@@ -202,6 +211,16 @@ async function tick(){
   document.getElementById('counts').innerHTML=`💻 <b>${working}</b> за столами · 👁 <b>${meeting}</b> в переговорке · 🛋 <b>${byZone.lounge.length}</b> отдыхают`;
  }catch(e){}
 }
+async function ctrl(action){
+  try{ await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})}); }
+  catch(e){} tick();
+}
+document.getElementById('btnGo').onclick=()=>ctrl('go');
+document.getElementById('btnStop').onclick=()=>ctrl('stop');
+document.getElementById('btnRun').onclick=(e)=>{
+  const b=e.target; b.classList.add('busy'); b.textContent='⚡ запускаю…';
+  ctrl('run').finally(()=>setTimeout(()=>{b.classList.remove('busy');b.textContent='⚡ Цикл сейчас';},4000));
+};
 ensureDesks(); tick(); setInterval(tick,3000);
 </script></body></html>"""
 
@@ -227,15 +246,30 @@ e.innerHTML=`<div class=nm>${I[x.state]||'•'} ${x.name}</div><div class=role>$
 g.appendChild(e);}}catch(e){}}t();setInterval(t,3000);</script></body></html>"""
 
 
-def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: int) -> None:
-    """Запустить Flask живой офис + сетку (блокирующе — вызывать в потоке-демоне)."""
+def run_dashboard(store, autonomy_state_file, roles, roster, host: str, port: int,
+                  control_cb=None) -> None:
+    """Запустить Flask живой офис + сетку (блокирующе — вызывать в потоке-демоне).
+
+    control_cb(action) — колбэк для кнопок сайта: "go" / "stop" / "run".
+    """
     try:
-        from flask import Flask, Response, jsonify
+        from flask import Flask, Response, jsonify, request
     except ImportError:
         logger.warning("flask не установлен — дашборд выключен")
         return
 
     app = Flask(__name__)
+
+    @app.post("/api/control")
+    def control():
+        action = (request.get_json(silent=True) or {}).get("action", "")
+        if control_cb and action in ("go", "stop", "run"):
+            try:
+                control_cb(action)
+            except Exception:  # noqa: BLE001
+                logger.exception("control_cb failed")
+            return jsonify({"ok": True, "action": action})
+        return jsonify({"ok": False}), 400
 
     @app.get("/")
     def office() -> "Response":
