@@ -36,7 +36,7 @@ def _is_authorized(request) -> bool:
     via_cf = bool(request.headers.get("Cf-Ray") or request.headers.get("Cf-Connecting-Ip"))
     if not via_cf and (request.remote_addr or "") in _LOCAL_HOSTS:
         return True
-    cf_email = (request.headers.get("Cf-Access-Authenticated-Email") or "").strip().lower()
+    cf_email = (request.headers.get("Cf-Access-Authenticated-User-Email") or "").strip().lower()
     if via_cf and cf_email and cf_email == owner:
         return True
     if token:

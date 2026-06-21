@@ -24,12 +24,12 @@ def test_via_cf_without_email_denied():
 
 
 def test_via_cf_wrong_email_denied():
-    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-Email": "intruder@evil.com"})
+    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": "intruder@evil.com"})
     assert d._is_authorized(req) is False
 
 
 def test_via_cf_owner_allowed():
-    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-Email": d._DEFAULT_OWNER})
+    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": d._DEFAULT_OWNER})
     assert d._is_authorized(req) is True
 
 
@@ -44,7 +44,7 @@ def test_bearer_token(monkeypatch):
 def test_owner_email_from_env(monkeypatch):
     # .env переопределяет владельца — читается в момент запроса, не на импорте
     monkeypatch.setenv("SANA_WEB_EMAIL", "boss@askrizz.com")
-    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-Email": "boss@askrizz.com"})
+    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": "boss@askrizz.com"})
     assert d._is_authorized(req) is True
 
 
@@ -60,5 +60,5 @@ def test_sana_web_gate():
     # через CF без почты → 403
     assert c.get("/", headers={"Cf-Ray": "abc"}).status_code == 403
     # через CF с почтой владельца → 200
-    r = c.get("/", headers={"Cf-Ray": "abc", "Cf-Access-Authenticated-Email": sana_web.OWNER_EMAIL})
+    r = c.get("/", headers={"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": sana_web.OWNER_EMAIL})
     assert r.status_code == 200
