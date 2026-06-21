@@ -44,7 +44,11 @@ app = Flask(__name__, static_folder="web", static_url_path="/static")
 #   (2) Cf-Access-Authenticated-User-Email совпадает с владельцем, ИЛИ
 #   (3) предъявлен Bearer-токен SANA_WEB_TOKEN (запасной прямой доступ).
 # Иначе 403 — даже если кто-то узнал URL туннеля.
-OWNER_EMAIL = os.environ.get("SANA_WEB_EMAIL", "slvaita3@gmail.com").strip().lower()
+_DEFAULT_OWNER = "slvaita3@gmail.com,ersultan040403@gmail.com"
+# Разрешённые почты владельца (SANA_WEB_EMAIL — через запятую/точку с запятой).
+OWNER_EMAILS = {e.strip().lower() for e in
+                os.environ.get("SANA_WEB_EMAIL", _DEFAULT_OWNER).replace(";", ",").split(",")
+                if e.strip()}
 WEB_TOKEN = os.environ.get("SANA_WEB_TOKEN", "").strip()
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
@@ -61,7 +65,7 @@ def _require_auth():
     if not via_cf and (request.remote_addr or "") in _LOCAL_HOSTS:
         return None  # настоящая локальная разработка
     cf_email = (request.headers.get("Cf-Access-Authenticated-User-Email") or "").strip().lower()
-    if via_cf and cf_email and cf_email == OWNER_EMAIL:
+    if via_cf and cf_email and cf_email in OWNER_EMAILS:
         return None  # Cloudflare Access подтвердил владельца
     if WEB_TOKEN:
         auth = request.headers.get("Authorization", "")

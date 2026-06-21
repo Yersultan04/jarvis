@@ -21,8 +21,14 @@ logger = logging.getLogger("jarvis.dashboard")
 # Cloudflare Tunnel + Access. Та же логика, что в sana_web.py: cloudflared
 # проксирует на 127.0.0.1, поэтому «локально» определяем по ОТСУТСТВИЮ
 # cloudflare-заголовков, а не по IP (иначе весь интернет = localhost).
-_DEFAULT_OWNER = "slvaita3@gmail.com"
+_DEFAULT_OWNER = "slvaita3@gmail.com,ersultan040403@gmail.com"
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _owner_emails() -> set[str]:
+    """Множество разрешённых почт владельца. SANA_WEB_EMAIL — через запятую/точку с запятой."""
+    raw = os.environ.get("SANA_WEB_EMAIL", _DEFAULT_OWNER)
+    return {e.strip().lower() for e in raw.replace(";", ",").split(",") if e.strip()}
 
 
 def _is_authorized(request) -> bool:
@@ -31,13 +37,13 @@ def _is_authorized(request) -> bool:
     Env читаем в момент запроса, а не на импорте: dashboard импортится в
     jarvis_bot ДО загрузки .env, иначе значения из .env были бы потеряны.
     """
-    owner = os.environ.get("SANA_WEB_EMAIL", _DEFAULT_OWNER).strip().lower()
+    owners = _owner_emails()
     token = os.environ.get("SANA_WEB_TOKEN", "").strip()
     via_cf = bool(request.headers.get("Cf-Ray") or request.headers.get("Cf-Connecting-Ip"))
     if not via_cf and (request.remote_addr or "") in _LOCAL_HOSTS:
         return True
     cf_email = (request.headers.get("Cf-Access-Authenticated-User-Email") or "").strip().lower()
-    if via_cf and cf_email and cf_email == owner:
+    if via_cf and cf_email and cf_email in owners:
         return True
     if token:
         auth = request.headers.get("Authorization", "")

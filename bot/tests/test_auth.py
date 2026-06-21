@@ -29,8 +29,25 @@ def test_via_cf_wrong_email_denied():
 
 
 def test_via_cf_owner_allowed():
-    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": d._DEFAULT_OWNER})
-    assert d._is_authorized(req) is True
+    # любая из почт владельца по умолчанию пускается (список через запятую)
+    for email in d._owner_emails():
+        req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": email})
+        assert d._is_authorized(req) is True
+
+
+def test_via_cf_both_default_owners_allowed():
+    # обе дефолтные почты (slvaita3 + ersultan040403) проходят гейт
+    assert {"slvaita3@gmail.com", "ersultan040403@gmail.com"} <= d._owner_emails()
+
+
+def test_multi_email_env(monkeypatch):
+    # SANA_WEB_EMAIL со списком через запятую → пускает каждую
+    monkeypatch.setenv("SANA_WEB_EMAIL", "a@x.com, b@y.com")
+    for email in ("a@x.com", "b@y.com"):
+        req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": email})
+        assert d._is_authorized(req) is True
+    req = _Req({"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": "c@z.com"})
+    assert d._is_authorized(req) is False
 
 
 def test_bearer_token(monkeypatch):
@@ -60,5 +77,6 @@ def test_sana_web_gate():
     # через CF без почты → 403
     assert c.get("/", headers={"Cf-Ray": "abc"}).status_code == 403
     # через CF с почтой владельца → 200
-    r = c.get("/", headers={"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": sana_web.OWNER_EMAIL})
+    owner = next(iter(sana_web.OWNER_EMAILS))
+    r = c.get("/", headers={"Cf-Ray": "abc", "Cf-Access-Authenticated-User-Email": owner})
     assert r.status_code == 200
