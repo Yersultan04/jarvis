@@ -24,6 +24,7 @@ import requests
 from jarvis_api import AgentAnswer, JarvisAPI
 from trello_api import TrelloClient
 from events import ROLES, ROSTER, StateStore
+from dashboard import run_dashboard
 
 logging.basicConfig(
     level=logging.INFO,
@@ -105,6 +106,10 @@ AUTONOMY_STATE_FILE = Path(__file__).with_name("autonomy_state.json")
 _auto_lock = threading.Lock()  # один builder за раз (1GB VM — не запускать 2 параллельно)
 # Ф2 — шина событий/состояния агентов (для дашборда Ф3 и 3D-офиса Ф4).
 STORE = StateStore(Path(__file__).with_name("state"))
+# Ф3 — веб-дашборд (поток внутри бота, слушает localhost, смотреть через SSH-туннель).
+DASH_ENABLED = os.environ.get("JARVIS_DASH", "1") not in ("0", "false", "")
+DASH_HOST = os.environ.get("JARVIS_DASH_HOST", "127.0.0.1")
+DASH_PORT = int(os.environ.get("JARVIS_DASH_PORT", "8770"))
 # Голос (Фаза B): edge-tts → mp3 → ffmpeg → ogg/opus → Telegram voice.
 TTS_VOICE = os.environ.get("JARVIS_TTS_VOICE", "ru-RU-SvetlanaNeural")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
@@ -1179,6 +1184,15 @@ def main() -> None:
     if BRIEF_ENABLED and OWNER_CHAT_ID:
         threading.Thread(target=scheduler_loop, args=(api,), daemon=True).start()
         logger.info("проактивность: утренний бриф в %s (chat %s)", BRIEF_TIME, OWNER_CHAT_ID)
+
+    # Ф3 — веб-дашборд команды (поток, localhost; смотреть через SSH-туннель).
+    if DASH_ENABLED:
+        threading.Thread(
+            target=run_dashboard,
+            args=(STORE, AUTONOMY_STATE_FILE, ROLES, ROSTER, DASH_HOST, DASH_PORT),
+            daemon=True,
+        ).start()
+        logger.info("дашборд Sana Corp на %s:%d", DASH_HOST, DASH_PORT)
 
     offset: int | None = None
     while True:
