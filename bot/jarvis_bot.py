@@ -94,6 +94,7 @@ TRELLO_API_KEY = os.environ.get("TRELLO_API_KEY", "")
 TRELLO_TOKEN = os.environ.get("TRELLO_TOKEN", "")
 TRELLO_UPNEXT = os.environ.get("TRELLO_UPNEXT_LIST", "6a34f4e6fd7c6752c1624be4")
 TRELLO_INREVIEW = os.environ.get("TRELLO_INREVIEW_LIST", "6a34f4e678f35e14f560a3d3")
+TRELLO_BLOCKED = os.environ.get("TRELLO_BLOCKED_LIST", "6a34f4e7b2d97204990283fb")
 TRELLO_AUTO_LABEL = os.environ.get("TRELLO_AUTO_LABEL", "6a37887b7d7ce696155f0acb")
 # Непрерывная автономия (Ф1). По умолчанию ВЫКЛ — включается /go, глушится /stop.
 AUTONOMY_DEFAULT = os.environ.get("JARVIS_AUTONOMY", "0") not in ("0", "false", "")
@@ -204,7 +205,7 @@ def format_audit(entries: list[dict]) -> str:
     """HTML-сводка последних действий для команды /audit."""
     icons = {
         "text": "💬", "voice": "🎤", "image": "🖼", "task": "🛠",
-        "brief": "☀️", "sync": "🔄", "undo": "↩️", "auto": "🏢",
+        "brief": "☀️", "sync": "🔄", "undo": "↩️", "auto": "🏢", "digest": "🌙",
     }
     lines = ["🧾 <b>Последние действия Sana</b>\n"]
     for e in entries:
@@ -251,6 +252,9 @@ def needs_claude(text: str) -> bool:
 OWNER_CHAT_ID = next(iter(ALLOWED_USERS), "")  # кому слать брифы (приватный чат: chat_id=user_id)
 BRIEF_TIME = os.environ.get("JARVIS_BRIEF_TIME", "08:30")  # ЧЧ:ММ локально
 BRIEF_ENABLED = os.environ.get("JARVIS_BRIEF_ENABLED", "1") not in ("0", "false", "")
+# Вечерний дайджест: что компания сделала за день (Sana Corp Ф1).
+DIGEST_TIME = os.environ.get("JARVIS_DIGEST_TIME", "20:00")
+DIGEST_ENABLED = os.environ.get("JARVIS_DIGEST_ENABLED", "1") not in ("0", "false", "")
 
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -564,6 +568,11 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
         threading.Thread(target=send_brief, args=(api,), daemon=True).start()
         return
 
+    if text in ("/digest", "/дайджест", "/итоги"):
+        send_message(chat_id, "🌙 Собираю дайджест за день…")
+        threading.Thread(target=send_digest, args=(api,), daemon=True).start()
+        return
+
     if text in ("/reset", "/сброс", "/забудь"):
         reset_history(chat_id)
         send_message(chat_id, "🧹 Контекст диалога очищен. Начнём с чистого листа.")
@@ -717,6 +726,41 @@ def send_brief(api: JarvisAPI) -> None:
     send_message(chat_id, "☀️ <b>Утренний бриф от Sana</b>\n\n" + body, html_mode=True)
 
 
+def _digest_prompt() -> str:
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    return (
+        f"Вечерний дайджест директору за сегодня ({today}). Кратко, с эмодзи, без воды.\n"
+        "1. 🏢 Что компания сделала автономно сегодня — посмотри аудит-лог "
+        "projects/jarvis/bot/audit/actions.jsonl (записи kind=auto/task за сегодня): "
+        "сколько задач, какие.\n"
+        "2. 👁 Что ждёт твоего ревью — Trello доска «Projects — Kanban 2026», список "
+        "«In Review» (перечисли карты). И застрявшее — список «Blocked».\n"
+        "3. 💡 1–2 предложения на завтра (из памяти/Trello, реальное).\n"
+        "Если за день автономной работы не было — так и скажи коротко. Автосообщение, "
+        "не задавай вопросов."
+    )
+
+
+def send_digest(api: JarvisAPI) -> None:
+    """Вечерний дайджест директору: что компания сделала за день (Sana Corp Ф1)."""
+    if not OWNER_CHAT_ID:
+        return
+    chat_id = int(OWNER_CHAT_ID)
+    t0 = time.time()
+    try:
+        ans = api.ask_chelsea(_digest_prompt())
+        body = format_answer(ans)
+        audit_log(chat_id, "digest", "вечерний дайджест", route="claude",
+                  status="ok", dur_s=time.time() - t0)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("digest failed")
+        body = friendly_error(exc)
+        audit_log(chat_id, "digest", "вечерний дайджест", route="claude",
+                  status="error", dur_s=time.time() - t0, error=str(exc))
+    send_message(chat_id, "🌙 <b>Вечерний дайджест Sana Corp</b>\n\n" + body, html_mode=True)
+
+
 _SYNC_TASK = (
     "Сверь память с реальностью (G3 актуализация). Шаги:\n"
     "1. Прочитай projects/jarvis/memory_inbox/notes.md и ключевые факты из MEMORY.md.\n"
@@ -862,14 +906,24 @@ def _auto_cycle_core(api: JarvisAPI) -> tuple[str | None, str | None]:
     task = _AUTO_TASK_TMPL.format(task=f"{card.name}\n{card.desc}")
     ans = api.ask_builder(task, cwd=BUILDER_CWD or None)
     report = format_answer(ans)
+    # Ревью-гейт (Vex+Kai): проверяем результат перед тем как отдать в In Review
     try:
-        tc.add_comment(card.id, "🏢 Sana (auto):\n" + _strip_tags(report)[:1500])
-        tc.move_card(card.id, TRELLO_INREVIEW)
-        moved = "→ In Review ✓"
+        passed, notes = api.ask_review(cwd=BUILDER_CWD or None)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("review failed")
+        passed, notes = False, f"ревьюер упал: {exc}"
+    target = TRELLO_INREVIEW if passed else TRELLO_BLOCKED
+    verdict = "👁 ревью PASS → In Review ✓" if passed else "👁 ревью FAIL → Blocked (нужен ты)"
+    try:
+        tc.add_comment(
+            card.id,
+            f"🏢 Sana (auto):\n{_strip_tags(report)[:1200]}\n\n👁 Ревью {'PASS' if passed else 'FAIL'}:\n{notes[:600]}",
+        )
+        tc.move_card(card.id, target)
     except Exception as exc:  # noqa: BLE001
         logger.exception("trello move/comment failed")
-        moved = f"(карту подвинуть не смог: {html.escape(str(exc))})"
-    return card.name, f"Взяла: <i>{html.escape(card.name)}</i> {moved}\n\n{report}"
+        verdict += f" (карту подвинуть не смог: {html.escape(str(exc))})"
+    return card.name, f"Взяла: <i>{html.escape(card.name)}</i>\n{verdict}\n\n{report}"
 
 
 def run_auto(api: JarvisAPI, chat_id: int) -> None:
@@ -1008,6 +1062,7 @@ def scheduler_loop(api: JarvisAPI) -> None:
     """Раз в минуту: BRIEF_TIME → бриф; каждые WATCH_EVERY_MIN → watcher (вне тихих часов)."""
     from datetime import datetime
     last_fired_date = ""
+    last_digest_date = ""
     last_watch = 0.0
     last_auto = 0.0
     while True:
@@ -1019,6 +1074,10 @@ def scheduler_loop(api: JarvisAPI) -> None:
                 last_fired_date = today
                 logger.info("планировщик: шлю утренний бриф")
                 send_brief(api)
+            if DIGEST_ENABLED and hhmm == DIGEST_TIME and last_digest_date != today:
+                last_digest_date = today
+                logger.info("планировщик: шлю вечерний дайджест")
+                send_digest(api)
             quiet = (WATCH_QUIET_FROM <= now.hour or now.hour < WATCH_QUIET_TO)
             # G4 watcher — вне тихих часов, не чаще WATCH_EVERY_MIN
             if not quiet and time.time() - last_watch >= WATCH_EVERY_MIN * 60:

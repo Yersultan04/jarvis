@@ -285,6 +285,37 @@ class JarvisAPI:
         )
         return AgentAnswer(status="succeeded", answer=answer, citations=[])
 
+    _REVIEW_BRIEF = (
+        "Ты — ревьюер (Vex+Kai) автономной компании Sana Corp. На ТЕКУЩЕЙ git-ветке "
+        "только что выполнена низкорисковая задача. Проверь работу:\n"
+        "1. Посмотри изменения: git diff main...HEAD (если пусто — git diff и git status).\n"
+        "2. Оцени: соответствует ли задаче, нет ли поломок/мусора/опечаток/секретов, "
+        "адекватны ли правки.\n"
+        "3. Если есть тесты — прогони (pytest / python -m py_compile по изменённым .py).\n"
+        "ОТВЕТЬ СТРОГО: первая строка — одно слово PASS или FAIL. Со 2-й строки — "
+        "2–4 строки кратких причин/замечаний. PASS только если работа годная и "
+        "безопасная; иначе FAIL."
+    )
+
+    def ask_review(self, *, cwd: str | None = None) -> tuple[bool, str]:
+        """Ревью-гейт: claude -p смотрит diff текущей ветки, возвращает (passed, заметки)."""
+        if not (self._claude_bin and self._builder_settings):
+            raise RuntimeError("Builder-режим не сконфигурирован")
+        out = self._run_claude(
+            [
+                self._claude_bin, "-p", "--output-format", "text",
+                "--permission-mode", "default",
+                "--settings", self._builder_settings,
+            ],
+            self._REVIEW_BRIEF,
+            timeout=self._builder_timeout,
+            cwd=cwd or self._workspace,
+            label="review",
+            retries=0,
+        )
+        first = (out.strip().splitlines() or ["FAIL"])[0].upper()
+        return first.startswith("PASS"), out.strip()
+
     # ---------------- voice: Groq Whisper STT ----------------
 
     def transcribe(
