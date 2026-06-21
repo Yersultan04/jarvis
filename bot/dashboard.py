@@ -174,6 +174,21 @@ body{
 @keyframes bob{0%,100%{margin-top:-58px}50%{margin-top:-64px}}
 @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
 @media (prefers-reduced-motion:reduce){.agent,.agent.idle,.agent.busy .av,.tv:before{animation:none!important;transition:none!important}}
+
+/* лента активности (плавающая панель справа) */
+.actdock{position:fixed;right:16px;top:78px;width:264px;max-height:calc(100vh - 150px);
+  display:flex;flex-direction:column;background:rgba(10,15,26,.72);backdrop-filter:blur(8px);
+  border:1px solid var(--line);border-radius:16px;padding:14px 14px 8px;z-index:20;box-shadow:0 20px 60px #0008}
+.actdock h3{font-family:Sora,sans-serif;font-size:11px;font-weight:600;letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--mut);margin-bottom:10px}
+.actfeed{display:flex;flex-direction:column;gap:7px;overflow-y:auto;padding-bottom:6px}
+.actfeed::-webkit-scrollbar{width:5px}.actfeed::-webkit-scrollbar-thumb{background:#1b2942;border-radius:3px}
+.arow{display:flex;gap:7px;align-items:baseline;font-size:12px;line-height:1.35}
+.arow .at{color:#5f6f87;font-variant-numeric:tabular-nums;white-space:nowrap}
+.arow .ar{color:#c4d2e2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.arow .as{margin-left:auto}
+.actfeed .empty{color:var(--mut);font-size:12px}
+@media(max-width:1480px){.actdock{display:none}}  /* не наезжать на сцену 1180px */
 </style></head><body>
 <div class=top>
   <div class=brand><span class=mk></span> Sana&nbsp;Corp</div>
@@ -191,6 +206,8 @@ body{
   <div class="zone meet"><span class=zlbl>Meeting Room</span><div class=table></div></div>
   <div class="zone lounge"><span class=zlbl>Lounge</span><div class=couch></div><div class=tv><span class=lbl>● LIVE</span></div></div>
 </div></div>
+
+<div class=actdock><h3>🧾 Активность</h3><div class=actfeed id=actfeed></div></div>
 
 <script>
 const ROLECOL={Sana:"#34d399",Maya:"#38bdf8",Kai:"#a78bfa",Shield:"#f472b6",Leo:"#fbbf24",
@@ -278,7 +295,15 @@ document.getElementById('btnRun').onclick=(e)=>{
   const b=e.target; b.classList.add('busy'); b.textContent='⚡ запускаю…';
   ctrl('run').finally(()=>setTimeout(()=>{b.classList.remove('busy');b.textContent='⚡ Цикл сейчас';},4000));
 };
-ensureDesks(); tick(); setInterval(tick,3000);
+const AIC={text:"💬",voice:"🎤",image:"🖼",task:"🛠",brief:"☀️",sync:"🔄",undo:"↩️",auto:"🏢",digest:"🌙"};
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
+async function act(){try{const d=await(await fetch('/api/activity')).json();const f=document.getElementById('actfeed');
+const items=(d.activity||[]).slice().reverse();
+if(!items.length){f.innerHTML='<div class=empty>пока тихо</div>';return;}
+f.innerHTML='';for(const x of items){const e=document.createElement('div');e.className='arow';
+e.innerHTML=`<span class=at>${esc(x.ts)}</span><span>${AIC[x.kind]||'•'}</span><span class=ar>${esc(x.request)}</span><span class=as>${x.status==='ok'?'✅':'⚠️'}</span>`;
+f.appendChild(e);}}catch(e){}}
+ensureDesks(); tick(); act(); setInterval(tick,3000); setInterval(act,5000);
 </script></body></html>"""
 
 
