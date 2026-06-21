@@ -23,6 +23,7 @@ import requests
 
 from jarvis_api import AgentAnswer, JarvisAPI
 from trello_api import TrelloClient
+from events import ROLES, ROSTER, StateStore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,6 +103,8 @@ AUTONOMY_MAX_PER_DAY = int(os.environ.get("JARVIS_AUTONOMY_MAX", "10"))   # ли
 AUTONOMY_EVERY_MIN = int(os.environ.get("JARVIS_AUTONOMY_EVERY_MIN", "15"))  # как часто тик
 AUTONOMY_STATE_FILE = Path(__file__).with_name("autonomy_state.json")
 _auto_lock = threading.Lock()  # один builder за раз (1GB VM — не запускать 2 параллельно)
+# Ф2 — шина событий/состояния агентов (для дашборда Ф3 и 3D-офиса Ф4).
+STORE = StateStore(Path(__file__).with_name("state"))
 # Голос (Фаза B): edge-tts → mp3 → ffmpeg → ogg/opus → Telegram voice.
 TTS_VOICE = os.environ.get("JARVIS_TTS_VOICE", "ru-RU-SvetlanaNeural")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
@@ -215,6 +218,33 @@ def format_audit(entries: list[dict]) -> str:
         req = html.escape((e.get("request") or "")[:60])
         dur = e.get("dur_s", 0)
         lines.append(f"{st} {ic} <i>{ts}</i> · {req} <i>({dur}с)</i>")
+    return "\n".join(lines)
+
+
+def format_status() -> str:
+    """Ф2: «кто чем занят» — живой снимок состояния агентов (для /status)."""
+    snap = STORE.snapshot()
+    icons = {
+        "idle": "🛋", "working": "🟢", "coordinating": "🧭", "reviewing": "👁",
+        "testing": "🧪", "meeting": "💬", "done": "✅", "error": "⚠️",
+    }
+    active: list[str] = []
+    resting: list[str] = []
+    for a in ROSTER:
+        s = snap.get(a, {})
+        state = s.get("state", "idle")
+        if state in ("idle", "done"):
+            resting.append(a)
+            continue
+        ic = icons.get(state, "•")
+        line = f"{ic} <b>{a}</b> <i>({ROLES.get(a, '')})</i> — {state}"
+        if s.get("detail"):
+            line += f": {html.escape(s['detail'])}"
+        active.append(line)
+    lines = ["🏢 <b>Sana Corp — кто чем занят</b>\n"]
+    lines += active if active else ["<i>Все свободны — активных задач нет.</i>"]
+    if resting:
+        lines.append("\n🛋 <i>На диване: " + ", ".join(resting) + "</i>")
     return "\n".join(lines)
 
 
@@ -553,6 +583,7 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
             "📊 разберу статус проектов и риски\n\n"
             "🏢 <b>/auto</b> — один автономный цикл (взять auto-ok задачу)\n"
             "🟢 <b>/go</b> · 🔴 <b>/stop</b> — вкл/выкл непрерывную автономию\n"
+            "🏢 <b>/status</b> — кто из команды чем занят\n"
             "🧾 <b>/audit</b> — что я делала (лог действий)\n"
             "↩️ <b>/undo</b> — отменить последнее обратимое действие\n"
             "🔄 <b>/sync</b> — сверить память с реальностью · 🧹 <b>/reset</b> — забыть диалог\n\n"
@@ -581,6 +612,10 @@ def handle_message(api: JarvisAPI, msg: dict) -> None:
     if text in ("/sync", "/синк", "/актуализируй"):
         send_message(chat_id, "🔄 Сверяю память с реальностью…")
         threading.Thread(target=run_sync, args=(api, chat_id), daemon=True).start()
+        return
+
+    if text.split()[0] in ("/status", "/статус", "/кто", "/team", "/команда"):
+        send_message(chat_id, format_status(), html_mode=True)
         return
 
     if text in ("/audit", "/аудит", "/лог"):
@@ -904,14 +939,23 @@ def _auto_cycle_core(api: JarvisAPI) -> tuple[str | None, str | None]:
         return None, None
     card = cards[0]
     task = _AUTO_TASK_TMPL.format(task=f"{card.name}\n{card.desc}")
-    ans = api.ask_builder(task, cwd=BUILDER_CWD or None)
-    report = format_answer(ans)
-    # Ревью-гейт (Vex+Kai): проверяем результат перед тем как отдать в In Review
+    # Ф2: эмитим состояние — Sana координирует, Maya за работой
+    STORE.emit("Sana", "coordinating", card.name)
+    STORE.emit("Maya", "working", card.name)
     try:
-        passed, notes = api.ask_review(cwd=BUILDER_CWD or None)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("review failed")
-        passed, notes = False, f"ревьюер упал: {exc}"
+        ans = api.ask_builder(task, cwd=BUILDER_CWD or None)
+        report = format_answer(ans)
+        # Ревью-гейт (Vex+Kai): проверяем результат перед тем как отдать в In Review
+        STORE.emit("Maya", "done", card.name)
+        STORE.emit("Vex", "reviewing", card.name)
+        STORE.emit("Kai", "testing", card.name)
+        try:
+            passed, notes = api.ask_review(cwd=BUILDER_CWD or None)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("review failed")
+            passed, notes = False, f"ревьюер упал: {exc}"
+    finally:
+        STORE.set_idle("Sana", "Maya", "Vex", "Kai")  # вернулись «на диван»
     target = TRELLO_INREVIEW if passed else TRELLO_BLOCKED
     verdict = "👁 ревью PASS → In Review ✓" if passed else "👁 ревью FAIL → Blocked (нужен ты)"
     try:
